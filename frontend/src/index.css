@@ -1,0 +1,60 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: #0f0f12;
+  color: #e4e4e7;
+}
+.app-layout { height: 100vh; display: flex; flex-direction: column; }
+.app-header {
+  height: 56px; padding: 0 20px;
+  display: flex; align-items: center; gap: 16px;
+  background: #18181b; border-bottom: 1px solid #27272a;
+}
+.app-logo { font-size: 18px; font-weight: 700; color: #a855f7; }
+.app-body { flex: 1; display: flex; overflow: hidden; }
+.sidebar {
+  width: 240px; background: #18181b; border-right: 1px solid #27272a;
+  padding: 16px; overflow-y: auto;
+}
+.main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.preview-area {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  background: #09090b; padding: 24px; overflow: hidden;
+}
+.preview-area video { max-width: 100%; max-height: 100%; border-radius: 8px; }
+.timeline-area {
+  height: 220px; background: #18181b; border-top: 1px solid #27272a;
+  padding: 12px; overflow-x: auto;
+}
+.track {
+  display: flex; align-items: center; height: 44px; margin-bottom: 6px;
+  gap: 8px;
+}
+.track-label {
+  width: 80px; flex-shrink: 0; font-size: 12px; color: #a1a1aa;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.track-lane {
+  flex: 1; height: 36px; background: #27272a; border-radius: 6px;
+  position: relative; min-width: 600px;
+}
+.clip-block {
+  position: absolute; height: 100%; top: 0;
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
+  border-radius: 4px; cursor: pointer; font-size: 11px;
+  color: #fff; padding: 4px 8px; overflow: hidden; white-space: nowrap;
+  display: flex; align-items: center;
+}
+.clip-block.audio { background: linear-gradient(135deg, #0891b2, #06b6d4); }
+.clip-block.subtitle { background: linear-gradient(135deg, #ca8a04, #eab308); color: #000; }
+.empty-hint { color: #71717a; text-align: center; padding: 40px; }
+.asset-item {
+  padding: 8px 10px; margin-bottom: 6px; background: #27272a;
+  border-radius: 6px; cursor: pointer; font-size: 12px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.asset-item:hover { background: #3f3f46; }
+.asset-type { font-size: 10px; padding: 1px 6px; border-radius: 8px; }
+.asset-type.video { background: #7c3aed; color: #fff; }
+.asset-type.audio { background: #06b6d4; color: #000; }

@@ -1,0 +1,15 @@
+# Go
+backend/cliplite-server
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+*.log
+tsconfig.tsbuildinfo
