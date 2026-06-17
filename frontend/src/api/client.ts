@@ -27,6 +27,8 @@ export const cliplite = {
     api.post<{ asset_id: number; format: string; path: string }>(
       `/assets/${id}/extract-audio?format=${format}`
     ).then(r => r.data),
+  removeAudio: (id: number) =>
+    api.post<{ asset_id: number; path: string }>(`/assets/${id}/remove-audio`).then(r => r.data),
 
   // 工程
   listProjects: () => api.get<Project[]>('/projects').then(r => r.data),

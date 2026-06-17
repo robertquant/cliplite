@@ -63,6 +63,7 @@ func main() {
 		api.DELETE("/assets/:id", h.DeleteAsset)
 		api.GET("/assets/:id/file", h.ServeAssetFile)
 		api.POST("/assets/:id/extract-audio", h.ExtractAudio)
+		api.POST("/assets/:id/remove-audio", h.RemoveAudioTrack)
 
 		// 工程
 		api.GET("/projects", h.ListProjects)

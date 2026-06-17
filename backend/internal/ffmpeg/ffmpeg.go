@@ -218,6 +218,23 @@ func (f *FFmpeg) Trim(input, output string, start, end float64) error {
 	return nil
 }
 
+// RemoveAudioTrack 去除视频的声音轨，只保留画面（-an）
+func (f *FFmpeg) RemoveAudioTrack(input, output string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), f.Timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, f.Bin,
+		"-i", input,
+		"-c:v", "copy", // 视频流直接复制，不重编码
+		"-an",          // 丢弃音频
+		"-y", output,
+	)
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("remove audio track failed: %w: %s", err, string(combined))
+	}
+	return nil
+}
+
 // Available 检查 ffmpeg/ffprobe 是否可用
 func (f *FFmpeg) Available() error {
 	if _, err := exec.LookPath(f.Bin); err != nil {

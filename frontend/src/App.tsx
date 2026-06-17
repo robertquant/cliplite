@@ -5,7 +5,7 @@ import {
   PlusOutlined, ReloadOutlined, ExportOutlined, DeleteOutlined,
   PlusCircleOutlined, FontSizeOutlined, FolderOpenOutlined,
   ZoomInOutlined, ZoomOutOutlined, PlayCircleOutlined, PauseCircleOutlined,
-  StepBackwardOutlined, StepForwardOutlined,
+  StepBackwardOutlined, StepForwardOutlined, AudioMutedOutlined,
 } from '@ant-design/icons';
 import { cliplite } from './api/client';
 import type { Asset, ProjectDetail, HealthStatus, Clip, Track, TextStyle, ActiveClipInfo } from './types';
@@ -82,6 +82,17 @@ export default function App() {
       refreshAssets();
     } catch (e: any) {
       message.error({ content: '提取失败: ' + (e?.message || ''), key: 'extract' });
+    }
+  };
+
+  const handleRemoveAudio = async (asset: Asset) => {
+    try {
+      message.loading({ content: '去除声音中...', key: 'rmaudio', duration: 0 });
+      await cliplite.removeAudio(asset.id);
+      message.success({ content: '已生成无声视频', key: 'rmaudio' });
+      refreshAssets();
+    } catch (e: any) {
+      message.error({ content: '去除声音失败: ' + (e?.message || ''), key: 'rmaudio' });
     }
   };
 
@@ -411,8 +422,19 @@ export default function App() {
           ))}
           {selectedAsset && selectedAsset.type === 'video' && (
             <div style={{ marginTop: 16, padding: 12, background: '#27272a', borderRadius: 8 }}>
-              <div style={{ fontSize: 11, color: '#a1a1aa', marginBottom: 8 }}>从该视频提取音频：</div>
+              <div style={{ fontSize: 11, color: '#a1a1aa', marginBottom: 8 }}>音视频处理：</div>
+              <div style={{ fontSize: 11, color: '#71717a', marginBottom: 6 }}>提取音频（保存为独立音频文件）</div>
               <Segmented options={[{ label: 'MP3', value: 'mp3' }, { label: 'WAV', value: 'wav' }, { label: 'AAC', value: 'aac' }]} onChange={(v) => handleExtractAudio(selectedAsset, v as any)} />
+              <div style={{ borderTop: '1px solid #3f3f46', margin: '12px 0 8px' }} />
+              <div style={{ fontSize: 11, color: '#71717a', marginBottom: 6 }}>去除声音（只保留画面，生成无声视频）</div>
+              <Popconfirm
+                title="去除该视频的声音？"
+                description="会生成一个新的无声视频素材（原视频保留）"
+                okText="去除" cancelText="取消"
+                onConfirm={() => handleRemoveAudio(selectedAsset)}
+              >
+                <Button size="small" block icon={<AudioMutedOutlined />}>去除声音</Button>
+              </Popconfirm>
             </div>
           )}
         </div>

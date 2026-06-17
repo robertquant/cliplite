@@ -204,6 +204,42 @@ func (h *Handlers) ExtractAudio(c *gin.Context) {
 	})
 }
 
+// RemoveAudioTrack POST /api/assets/:id/remove-audio — 去除视频声音，只保留画面
+func (h *Handlers) RemoveAudioTrack(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var srcPath string
+	if err := h.DB.QueryRow(`SELECT storage_path FROM assets WHERE id=?`, id).Scan(&srcPath); err != nil {
+		c.JSON(404, gin.H{"error": "素材不存在"})
+		return
+	}
+
+	outPath := h.Storage.NewPath("renders", ".mp4")
+	if err := h.FFmpeg.RemoveAudioTrack(srcPath, outPath); err != nil {
+		c.JSON(500, gin.H{"error": "去音轨失败: " + err.Error()})
+		return
+	}
+
+	// 探测时长
+	var duration float64
+	var w, ht int
+	var codec string
+	if p, err := h.FFmpeg.ProbeMedia(outPath); err == nil {
+		duration, w, ht, codec = p.Duration, p.Width, p.Height, p.Codec
+	}
+
+	res, _ := h.DB.Exec(
+		`INSERT INTO assets (type, filename, storage_path, duration, width, height, codec, size_bytes) VALUES ('video', ?, ?, ?, ?, ?, ?, ?)`,
+		"muted_"+filepath.Base(outPath), outPath, duration, w, ht, codec, fileSize(outPath),
+	)
+	newID, _ := res.LastInsertId()
+
+	c.JSON(200, gin.H{
+		"asset_id": newID,
+		"path":     "/api/assets/" + strconv.FormatInt(newID, 10) + "/file",
+		"duration": duration,
+	})
+}
+
 // Health GET /api/health
 func (h *Handlers) Health(c *gin.Context) {
 	ffErr := ""
