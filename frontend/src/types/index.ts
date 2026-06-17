@@ -23,6 +23,15 @@ export interface Project {
   updated_at: string;
 }
 
+export interface TextStyle {
+  font?: string;
+  size?: number;
+  color?: string;        // #RRGGBB
+  strokeColor?: string;  // #RRGGBB，描边色
+  outlineWidth?: number;
+  position?: 'top' | 'center' | 'bottom';
+}
+
 export interface Clip {
   id?: number;
   track_id?: number;

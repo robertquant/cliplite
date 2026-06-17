@@ -1,14 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Button, Upload, message, Tag, Modal, Input, Segmented, Progress, Tooltip } from 'antd';
+import { Button, Upload, message, Tag, Modal, Input, Segmented, Progress, Tooltip, ColorPicker, Select, InputNumber } from 'antd';
 import {
   UploadOutlined, VideoCameraOutlined, AudioOutlined,
   PlusOutlined, ReloadOutlined, ExportOutlined, DeleteOutlined,
   PlusCircleOutlined, FontSizeOutlined, FolderOpenOutlined,
+  ZoomInOutlined, ZoomOutOutlined,
 } from '@ant-design/icons';
 import { cliplite } from './api/client';
-import type { Asset, ProjectDetail, HealthStatus, Clip, Track } from './types';
+import type { Asset, ProjectDetail, HealthStatus, Clip, Track, TextStyle } from './types';
 
-const PX_PER_SEC = 24; // 时间轴每秒像素宽度
+const FONT_OPTIONS = ['Arial', 'Helvetica', 'SimHei', 'Microsoft YaHei', 'SimSun', 'Georgia', 'Times New Roman', 'Courier New'];
 
 export default function App() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -19,21 +20,32 @@ export default function App() {
   const [creating, setCreating] = useState(false);
   const [projectName, setProjectName] = useState('');
 
-  // 渲染状态
+  // 时间轴缩放（每秒像素数）
+  const [pxPerSec, setPxPerSec] = useState(24);
+
+  // 渲染
   const [rendering, setRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderUrl, setRenderUrl] = useState<string | null>(null);
   const renderPollRef = useRef<number | null>(null);
 
-  // 字幕输入
+  // 字幕编辑（含样式）
   const [subtitleModal, setSubtitleModal] = useState(false);
   const [subText, setSubText] = useState('');
   const [subStart, setSubStart] = useState(0);
   const [subEnd, setSubEnd] = useState(3);
+  const [subStyle, setSubStyle] = useState<TextStyle>({
+    font: 'SimHei', size: 24, color: '#FFFFFF',
+    strokeColor: '#000000', outlineWidth: 2, position: 'bottom',
+  });
 
-  // 打开已有工程
+  // 工程列表
   const [projectListOpen, setProjectListOpen] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
+
+  // 拖拽状态
+  const [dragInfo, setDragInfo] = useState<{ trackId: number; index: number } | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   useEffect(() => {
     cliplite.health().then(setHealth).catch(() => {});
@@ -57,10 +69,9 @@ export default function App() {
   const handleExtractAudio = async (asset: Asset, format: 'mp3' | 'wav' | 'aac') => {
     try {
       message.loading({ content: '提取音频中...', key: 'extract', duration: 0 });
-      const res = await cliplite.extractAudio(asset.id, format);
+      await cliplite.extractAudio(asset.id, format);
       message.success({ content: `音频提取成功 (${format})`, key: 'extract' });
       refreshAssets();
-      console.log('extracted', res);
     } catch (e: any) {
       message.error({ content: '提取失败: ' + (e?.message || ''), key: 'extract' });
     }
@@ -80,8 +91,7 @@ export default function App() {
   };
 
   const loadProjectList = async () => {
-    const list = await cliplite.listProjects();
-    setProjectList(list);
+    setProjectList(await cliplite.listProjects());
     setProjectListOpen(true);
   };
 
@@ -93,43 +103,47 @@ export default function App() {
     message.success(`已打开: ${p.project.name}`);
   };
 
-  // 把素材加到对应轨道
+  // 添加素材到时间轴
   const addAssetToTimeline = async (asset: Asset) => {
-    if (!project) {
-      message.warning('请先创建或打开工程');
-      return;
-    }
+    if (!project) { message.warning('请先创建或打开工程'); return; }
     const trackType = asset.type === 'video' ? 'video' : 'audio';
     const track = project.tracks.find(t => t.type === trackType);
-    if (!track) {
-      message.error(`找不到 ${trackType} 轨道`);
-      return;
-    }
-    // 计算新片段起点（接在已有片段后面）
+    if (!track) return;
     const lastEnd = track.clips.reduce((m, c) => Math.max(m, c.timeline_end), 0);
     const newClip: Clip = {
-      track_id: track.id,
-      asset_id: asset.id,
-      timeline_start: lastEnd,
-      timeline_end: lastEnd + (asset.duration || 5),
-      source_start: 0,
-      source_end: asset.duration || 5,
+      track_id: track.id, asset_id: asset.id,
+      timeline_start: lastEnd, timeline_end: lastEnd + (asset.duration || 5),
+      source_start: 0, source_end: asset.duration || 5,
     };
-    const updatedClips = [...track.clips, newClip];
-    await cliplite.saveClips(track.id, updatedClips);
-    // 刷新工程
-    const fresh = await cliplite.getProject(project.project.id);
-    setProject(fresh);
+    await cliplite.saveClips(track.id, [...track.clips, newClip]);
+    setProject(await cliplite.getProject(project.project.id));
     message.success(`已添加到${trackType === 'video' ? '视频' : '音乐'}轨`);
   };
 
   // 删除片段
   const removeClip = async (track: Track, clipIndex: number) => {
     if (!project) return;
-    const updated = track.clips.filter((_, i) => i !== clipIndex);
-    await cliplite.saveClips(track.id, updated);
-    const fresh = await cliplite.getProject(project.project.id);
-    setProject(fresh);
+    await cliplite.saveClips(track.id, track.clips.filter((_, i) => i !== clipIndex));
+    setProject(await cliplite.getProject(project.project.id));
+  };
+
+  // 拖拽重排序（重新计算时间轴位置）
+  const reorderClips = async (track: Track, fromIdx: number, toIdx: number) => {
+    if (!project || fromIdx === toIdx) return;
+    const clips = [...track.clips];
+    const [moved] = clips.splice(fromIdx, 1);
+    clips.splice(toIdx, 0, moved);
+    // 重新紧凑排列（按新顺序累加时长）
+    let cursor = 0;
+    const reordered = clips.map(c => {
+      const dur = c.timeline_end - c.timeline_start;
+      const start = cursor;
+      cursor += dur;
+      return { ...c, timeline_start: start, timeline_end: cursor };
+    });
+    await cliplite.saveClips(track.id, reordered);
+    setProject(await cliplite.getProject(project.project.id));
+    message.success('已重新排序');
   };
 
   // 添加字幕
@@ -137,34 +151,28 @@ export default function App() {
     if (!project || !subText.trim()) return;
     const track = project.tracks.find(t => t.type === 'subtitle');
     if (!track) return;
-    const lastEnd = track.clips.reduce((m, c) => Math.max(m, c.timeline_end), 0);
     const start = subStart;
     const end = Math.max(subEnd, start + 0.5);
     const newClip: Clip = {
       track_id: track.id,
-      timeline_start: start,
-      timeline_end: end,
+      timeline_start: start, timeline_end: end,
       text: subText.trim(),
+      style_json: JSON.stringify(subStyle),
     };
     await cliplite.saveClips(track.id, [...track.clips, newClip]);
-    const fresh = await cliplite.getProject(project.project.id);
-    setProject(fresh);
+    setProject(await cliplite.getProject(project.project.id));
     setSubText('');
     setSubtitleModal(false);
     message.success('字幕已添加');
   };
 
-  // 导出渲染
   const handleExport = async () => {
     if (!project) return;
     const videoTrack = project.tracks.find(t => t.type === 'video');
     if (!videoTrack || videoTrack.clips.length === 0) {
-      message.warning('视频轨为空，请先添加视频片段');
-      return;
+      message.warning('视频轨为空，请先添加视频片段'); return;
     }
-    setRendering(true);
-    setRenderProgress(0);
-    setRenderUrl(null);
+    setRendering(true); setRenderProgress(0); setRenderUrl(null);
     try {
       await cliplite.startRender(project.project.id);
       message.info('开始渲染...');
@@ -191,22 +199,15 @@ export default function App() {
           setRendering(false);
           message.error('渲染失败: ' + (st.error || ''));
         }
-      } catch {
-        // 忽略轮询错误
-      }
+      } catch {}
     }, 1500);
   };
 
-  useEffect(() => {
-    return () => {
-      if (renderPollRef.current) window.clearInterval(renderPollRef.current);
-    };
-  }, []);
+  useEffect(() => () => { if (renderPollRef.current) window.clearInterval(renderPollRef.current); }, []);
 
   const fmtDuration = (s: number) => {
     if (!s) return '0:00';
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
@@ -217,7 +218,14 @@ export default function App() {
     return max;
   }, [project]);
 
-  const timelineWidth = Math.max(800, totalDuration() * PX_PER_SEC + 100);
+  const timelineWidth = Math.max(800, totalDuration() * pxPerSec + 100);
+  const tracks = project?.tracks || DEMO_TRACKS;
+
+  // 解析字幕片段样式用于预览
+  const parseStyle = (clip: Clip): TextStyle => {
+    try { return clip.style_json ? JSON.parse(clip.style_json) : {}; }
+    catch { return {}; }
+  };
 
   return (
     <div className="app-layout">
@@ -239,56 +247,32 @@ export default function App() {
       </div>
 
       <div className="app-body">
-        {/* 素材库 */}
         <div className="sidebar">
-          <div style={{ marginBottom: 12, fontWeight: 600, color: '#a1a1aa', display: 'flex', justifyContent: 'space-between' }}>
-            <span>素材库 ({assets.length})</span>
-          </div>
+          <div style={{ marginBottom: 12, fontWeight: 600, color: '#a1a1aa' }}>素材库 ({assets.length})</div>
           {assets.length === 0 && (
-            <div style={{ color: '#71717a', fontSize: 12, padding: 16, textAlign: 'center' }}>
-              点击右上角"导入素材"上传视频/音频
-            </div>
+            <div style={{ color: '#71717a', fontSize: 12, padding: 16, textAlign: 'center' }}>点击右上角"导入素材"上传视频/音频</div>
           )}
           {assets.map(a => (
-            <div
-              key={a.id}
-              className="asset-item"
-              onClick={() => setSelectedAsset(a)}
-              style={selectedAsset?.id === a.id ? { background: '#52525b' } : {}}
-            >
+            <div key={a.id} className="asset-item" onClick={() => setSelectedAsset(a)} style={selectedAsset?.id === a.id ? { background: '#52525b' } : {}}>
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {a.type === 'video' ? <VideoCameraOutlined /> : <AudioOutlined />} {a.filename}
                 </div>
-                <div style={{ color: '#71717a', fontSize: 10 }}>
-                  {fmtDuration(a.duration)} · {a.width > 0 ? `${a.width}x${a.height}` : 'audio'}
-                </div>
+                <div style={{ color: '#71717a', fontSize: 10 }}>{fmtDuration(a.duration)} · {a.width > 0 ? `${a.width}x${a.height}` : 'audio'}</div>
               </div>
               <Tooltip title="加到时间轴">
-                <PlusCircleOutlined
-                  onClick={(e) => { e.stopPropagation(); addAssetToTimeline(a); }}
-                  style={{ color: '#22d3ee', fontSize: 16, marginLeft: 8 }}
-                />
+                <PlusCircleOutlined onClick={(e) => { e.stopPropagation(); addAssetToTimeline(a); }} style={{ color: '#22d3ee', fontSize: 16, marginLeft: 8 }} />
               </Tooltip>
             </div>
           ))}
-
           {selectedAsset && selectedAsset.type === 'video' && (
             <div style={{ marginTop: 16, padding: 12, background: '#27272a', borderRadius: 8 }}>
               <div style={{ fontSize: 11, color: '#a1a1aa', marginBottom: 8 }}>从该视频提取音频：</div>
-              <Segmented
-                options={[
-                  { label: 'MP3', value: 'mp3' },
-                  { label: 'WAV', value: 'wav' },
-                  { label: 'AAC', value: 'aac' },
-                ]}
-                onChange={(v) => handleExtractAudio(selectedAsset, v as any)}
-              />
+              <Segmented options={[{ label: 'MP3', value: 'mp3' }, { label: 'WAV', value: 'wav' }, { label: 'AAC', value: 'aac' }]} onChange={(v) => handleExtractAudio(selectedAsset, v as any)} />
             </div>
           )}
         </div>
 
-        {/* 主区 */}
         <div className="main-content">
           <div className="preview-area">
             {renderUrl ? (
@@ -296,16 +280,11 @@ export default function App() {
                 <div style={{ color: '#22d3ee', marginBottom: 12, fontSize: 14 }}>✅ 渲染产物预览</div>
                 <video src={renderUrl} controls autoPlay style={{ maxWidth: '100%', maxHeight: '70vh' }} />
                 <div style={{ marginTop: 12 }}>
-                  <a href={renderUrl} download>
-                    <Button type="primary" icon={<ExportOutlined />}>下载视频</Button>
-                  </a>
+                  <a href={renderUrl} download><Button type="primary" icon={<ExportOutlined />}>下载视频</Button></a>
                 </div>
               </div>
             ) : !selectedAsset ? (
-              <div className="empty-hint">
-                <VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-                <div>从左侧选择素材预览</div>
-              </div>
+              <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>从左侧选择素材预览</div></div>
             ) : selectedAsset.type === 'video' ? (
               <video key={selectedAsset.id} src={cliplite.assetFileUrl(selectedAsset.id)} controls autoPlay />
             ) : (
@@ -317,76 +296,74 @@ export default function App() {
             )}
           </div>
 
-          {/* 时间轴 */}
           <div className="timeline-area">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <span style={{ color: '#a1a1aa', fontSize: 12 }}>
-                {project ? `工程: ${project.project.name} · 时长 ${fmtDuration(totalDuration())}` : '未打开工程（点击"新建工程"或"打开工程"）'}
+                {project ? `工程: ${project.project.name} · 时长 ${fmtDuration(totalDuration())}` : '未打开工程'}
               </span>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button
-                  size="small"
-                  icon={<FontSizeOutlined />}
-                  disabled={!project}
-                  onClick={() => { setSubStart(totalDuration()); setSubEnd(totalDuration() + 3); setSubtitleModal(true); }}
-                >加字幕</Button>
-                <Button
-                  size="small"
-                  type="primary"
-                  icon={<ExportOutlined />}
-                  disabled={!project || rendering}
-                  onClick={handleExport}
-                  loading={rendering}
-                >导出视频</Button>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {/* 缩放控制 */}
+                <Button.Group size="small">
+                  <Button icon={<ZoomOutOutlined />} onClick={() => setPxPerSec(p => Math.max(8, p - 6))} />
+                  <span style={{ color: '#71717a', fontSize: 11, padding: '0 8px' }}>{pxPerSec}px/s</span>
+                  <Button icon={<ZoomInOutlined />} onClick={() => setPxPerSec(p => Math.min(120, p + 6))} />
+                </Button.Group>
+                <Button size="small" icon={<FontSizeOutlined />} disabled={!project}
+                  onClick={() => { setSubStart(totalDuration()); setSubEnd(totalDuration() + 3); setSubtitleModal(true); }}>加字幕</Button>
+                <Button size="small" type="primary" icon={<ExportOutlined />} disabled={!project || rendering} onClick={handleExport} loading={rendering}>导出视频</Button>
               </div>
             </div>
 
-            {rendering && (
-              <Progress percent={renderProgress} size="small" style={{ marginBottom: 8 }} status="active" />
-            )}
+            {rendering && <Progress percent={renderProgress} size="small" style={{ marginBottom: 8 }} status="active" />}
 
             {/* 时间标尺 */}
             <div className="ruler" style={{ width: timelineWidth }}>
               {Array.from({ length: Math.ceil(totalDuration() / 5) + 1 }).map((_, i) => (
-                <div key={i} className="ruler-tick" style={{ left: i * 5 * PX_PER_SEC }}>
-                  <span>{fmtDuration(i * 5)}</span>
-                </div>
+                <div key={i} className="ruler-tick" style={{ left: i * 5 * pxPerSec }}><span>{fmtDuration(i * 5)}</span></div>
               ))}
             </div>
 
-            {(project?.tracks || DEMO_TRACKS).map((track: Track) => (
+            {tracks.map((track: Track) => (
               <div className="track" key={track.id}>
-                <div className="track-label">
-                  {track.type === 'video' ? '🎬 视频' : track.type === 'audio' ? '🎵 音乐' : '💬 字幕'}
-                </div>
-                <div className="track-lane" style={{ width: timelineWidth }}>
+                <div className="track-label">{track.type === 'video' ? '🎬 视频' : track.type === 'audio' ? '🎵 音乐' : '💬 字幕'}</div>
+                <div className="track-lane" style={{ width: timelineWidth }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => { setDragOverIndex(null); }}
+                >
                   {track.clips && track.clips.length > 0 ? (
-                    track.clips.map((clip: Clip, i: number) => (
-                      <Tooltip key={i} title={
-                        <div>
-                          <div>{clip.text || '片段'}</div>
-                          <div>{fmtDuration(clip.timeline_start)} → {fmtDuration(clip.timeline_end)}</div>
-                        </div>
-                      }>
+                    track.clips.map((clip: Clip, i: number) => {
+                      const st = parseStyle(clip);
+                      return (
+                      <Tooltip key={i} title={<div><div>{clip.text || '片段'}</div><div>{fmtDuration(clip.timeline_start)} → {fmtDuration(clip.timeline_end)}</div>{track.type === 'subtitle' && st.font && <div>字体:{st.font} {st.size}px</div>}</div>}>
                         <div
-                          className={`clip-block ${track.type}`}
+                          className={`clip-block ${track.type}${dragOverIndex === i ? ' drag-over' : ''}`}
+                          draggable
+                          onDragStart={() => setDragInfo({ trackId: track.id, index: i })}
+                          onDragOver={(e) => { e.preventDefault(); if (dragInfo?.trackId === track.id) setDragOverIndex(i); }}
+                          onDrop={(e) => {
+                            e.stopPropagation();
+                            if (dragInfo && dragInfo.trackId === track.id) {
+                              reorderClips(track, dragInfo.index, i);
+                            }
+                            setDragInfo(null); setDragOverIndex(null);
+                          }}
+                          onDragEnd={() => { setDragInfo(null); setDragOverIndex(null); }}
                           style={{
-                            left: `${clip.timeline_start * PX_PER_SEC}px`,
-                            width: `${Math.max(40, (clip.timeline_end - clip.timeline_start) * PX_PER_SEC)}px`,
+                            left: `${clip.timeline_start * pxPerSec}px`,
+                            width: `${Math.max(40, (clip.timeline_end - clip.timeline_start) * pxPerSec)}px`,
                           }}
                         >
                           <span className="clip-text">{clip.text || (track.type === 'subtitle' ? '字幕' : '片段')}</span>
-                          <DeleteOutlined
-                            className="clip-del"
-                            onClick={(e) => { e.stopPropagation(); removeClip(track, i); }}
-                          />
+                          {track.type === 'subtitle' && st.color && (
+                            <span className="clip-swatch" style={{ background: st.color, border: `1px solid ${st.strokeColor || '#000'}` }} />
+                          )}
+                          <DeleteOutlined className="clip-del" onClick={(e) => { e.stopPropagation(); removeClip(track, i); }} />
                         </div>
                       </Tooltip>
-                    ))
+                      );
+                    })
                   ) : (
-                    <div className="track-empty">
-                      {track.type === 'subtitle' ? '点击"加字幕"' : '点素材上的 ➕ 加入'}
-                    </div>
+                    <div className="track-empty">{track.type === 'subtitle' ? '点击"加字幕"' : '点素材 ➕ 加入，可拖拽排序'}</div>
                   )}
                 </div>
               </div>
@@ -400,20 +377,61 @@ export default function App() {
         <Input placeholder="工程名称" value={projectName} onChange={e => setProjectName(e.target.value)} onPressEnter={handleCreateProject} />
       </Modal>
 
-      {/* 加字幕 */}
-      <Modal title="添加字幕" open={subtitleModal} onOk={handleAddSubtitle} onCancel={() => setSubtitleModal(false)} okText="添加" cancelText="取消">
+      {/* 加字幕（含样式） */}
+      <Modal title="添加字幕" open={subtitleModal} onOk={handleAddSubtitle} onCancel={() => setSubtitleModal(false)} okText="添加" cancelText="取消" width={520}>
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 12, color: '#a1a1aa' }}>字幕内容</label>
-          <Input.TextArea rows={3} placeholder="输入字幕文字" value={subText} onChange={e => setSubText(e.target.value)} />
+          <label className="field-label">字幕内容</label>
+          <Input.TextArea rows={2} placeholder="输入字幕文字" value={subText} onChange={e => setSubText(e.target.value)} />
         </div>
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12, color: '#a1a1aa' }}>开始(秒)</label>
-            <Input type="number" value={subStart} onChange={e => setSubStart(parseFloat(e.target.value) || 0)} />
+            <label className="field-label">开始(秒)</label>
+            <InputNumber value={subStart} onChange={v => setSubStart(v || 0)} style={{ width: '100%' }} />
           </div>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12, color: '#a1a1aa' }}>结束(秒)</label>
-            <Input type="number" value={subEnd} onChange={e => setSubEnd(parseFloat(e.target.value) || 0)} />
+            <label className="field-label">结束(秒)</label>
+            <InputNumber value={subEnd} onChange={v => setSubEnd(v || 0)} style={{ width: '100%' }} />
+          </div>
+        </div>
+        <div className="style-section">
+          <div className="style-title">字幕样式</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label className="field-label">字体</label>
+              <Select value={subStyle.font} onChange={v => setSubStyle({ ...subStyle, font: v })} style={{ width: '100%' }}
+                options={FONT_OPTIONS.map(f => ({ label: f, value: f }))} />
+            </div>
+            <div>
+              <label className="field-label">字号</label>
+              <InputNumber value={subStyle.size} onChange={v => setSubStyle({ ...subStyle, size: v || 24 })} style={{ width: '100%' }} min={8} max={120} />
+            </div>
+            <div>
+              <label className="field-label">文字颜色</label>
+              <ColorPicker value={subStyle.color} onChange={c => setSubStyle({ ...subStyle, color: c.toHexString() })} showText />
+            </div>
+            <div>
+              <label className="field-label">描边颜色</label>
+              <ColorPicker value={subStyle.strokeColor} onChange={c => setSubStyle({ ...subStyle, strokeColor: c.toHexString() })} showText />
+            </div>
+            <div>
+              <label className="field-label">描边宽度</label>
+              <InputNumber value={subStyle.outlineWidth} onChange={v => setSubStyle({ ...subStyle, outlineWidth: v || 0 })} style={{ width: '100%' }} min={0} max={10} />
+            </div>
+            <div>
+              <label className="field-label">位置</label>
+              <Select value={subStyle.position} onChange={v => setSubStyle({ ...subStyle, position: v })} style={{ width: '100%' }}
+                options={[{ label: '顶部', value: 'top' }, { label: '中间', value: 'center' }, { label: '底部', value: 'bottom' }]} />
+            </div>
+          </div>
+          {/* 实时预览 */}
+          <div className="subtitle-preview" style={{ justifyContent: subStyle.position === 'top' ? 'flex-start' : subStyle.position === 'center' ? 'center' : 'flex-end' }}>
+            <span style={{
+              fontFamily: subStyle.font, fontSize: subStyle.size,
+              color: subStyle.color,
+              WebkitTextStroke: subStyle.outlineWidth ? `${subStyle.outlineWidth}px ${subStyle.strokeColor}` : 'none',
+            }}>
+              {subText || '字幕预览效果'}
+            </span>
           </div>
         </div>
       </Modal>
@@ -422,15 +440,8 @@ export default function App() {
       <Modal title="打开工程" open={projectListOpen} footer={null} onCancel={() => setProjectListOpen(false)}>
         {projectList.length === 0 && <div style={{ color: '#71717a' }}>暂无工程</div>}
         {projectList.map(p => (
-          <div
-            key={p.id}
-            className="asset-item"
-            onClick={() => openProject(p.id)}
-          >
-            <div>
-              <div>{p.name}</div>
-              <div style={{ color: '#71717a', fontSize: 10 }}>{p.width}x{p.height} · {p.fps}fps</div>
-            </div>
+          <div key={p.id} className="asset-item" onClick={() => openProject(p.id)}>
+            <div><div>{p.name}</div><div style={{ color: '#71717a', fontSize: 10 }}>{p.width}x{p.height} · {p.fps}fps</div></div>
           </div>
         ))}
       </Modal>

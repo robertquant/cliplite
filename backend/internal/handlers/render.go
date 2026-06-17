@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -202,8 +203,9 @@ func (h *Handlers) doRender(projectID int64) {
 			h.failRender(projectID, "生成字幕失败: "+err.Error())
 			return
 		}
+		forceStyle := buildForceStyle(subClips[0].StyleJSON)
 		stage3 := filepath.Join(tmpDir, "subtitled.mp4")
-		if err := h.FFmpeg.BurnSubtitles(current, srtFile, stage3); err != nil {
+		if err := h.FFmpeg.BurnSubtitles(current, srtFile, stage3, forceStyle); err != nil {
 			// 字幕失败不致命，用无字幕版本继续
 			_ = err
 		} else {
@@ -328,6 +330,73 @@ func srtTime(sec float64) string {
 	s := int(sec) % 60
 	ms := int((sec - float64(int(sec))) * 1000)
 	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, ms)
+}
+
+// buildForceStyle 把 TextStyle JSON 转成 libass force_style 字符串
+// TextStyle: {font, size, color(#RRGGBB 或 #AARRGGBB), strokeColor, position: top|center|bottom}
+func buildForceStyle(styleJSON string) string {
+	if strings.TrimSpace(styleJSON) == "" {
+		return ""
+	}
+	var s struct {
+		Font         string `json:"font"`
+		Size         int    `json:"size"`
+		Color        string `json:"color"`
+		StrokeColor  string `json:"strokeColor"`
+		OutlineWidth int    `json:"outlineWidth"`
+		Position     string `json:"position"`
+	}
+	if err := json.Unmarshal([]byte(styleJSON), &s); err != nil {
+		return ""
+	}
+	parts := []string{}
+	if s.Font != "" {
+		parts = append(parts, "FontName="+s.Font)
+	}
+	if s.Size > 0 {
+		parts = append(parts, fmt.Sprintf("FontSize=%d", s.Size))
+	}
+	if c := hexToAssColor(s.Color); c != "" {
+		parts = append(parts, "PrimaryColour="+c)
+	}
+	if c := hexToAssColor(s.StrokeColor); c != "" {
+		parts = append(parts, "OutlineColour="+c)
+	}
+	ow := s.OutlineWidth
+	if ow == 0 && s.StrokeColor != "" {
+		ow = 2 // 有描边色但没指定宽度，默认 2
+	}
+	if ow > 0 {
+		parts = append(parts, fmt.Sprintf("Outline=%d", ow), "BorderStyle=1")
+	}
+	// ASS Alignment（小键盘布局）：2=底中 5=正中 8=顶中
+	align := 2
+	switch s.Position {
+	case "top":
+		align = 8
+	case "center":
+		align = 5
+	case "bottom":
+		align = 2
+	}
+	parts = append(parts, fmt.Sprintf("Alignment=%d", align), "MarginV=30")
+	return strings.Join(parts, ",")
+}
+
+// hexToAssColor 把 #RRGGBB / #AARRGGBB 转成 ASS 的 &HAABBGGRR
+func hexToAssColor(hex string) string {
+	h := strings.TrimPrefix(hex, "#")
+	if len(h) != 6 && len(h) != 8 {
+		return ""
+	}
+	var a, r, g, b string
+	if len(h) == 8 {
+		a, r, g, b = h[0:2], h[2:4], h[4:6], h[6:8]
+	} else {
+		a = "00"
+		r, g, b = h[0:2], h[2:4], h[4:6]
+	}
+	return "&H" + a + b + g + r
 }
 
 func copyFile(src, dst string) error {

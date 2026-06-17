@@ -174,16 +174,20 @@ func (f *FFmpeg) MixAudio(video, audio, output string, audioVolume float64, keep
 	return nil
 }
 
-// BurnSubtitles 用 SRT 字幕文件烧录到视频（硬字幕）
-func (f *FFmpeg) BurnSubtitles(video, srtFile, output string) error {
+// BurnSubtitles 用 SRT 字幕文件烧录到视频（硬字幕）。forceStyle 为 libass 样式字符串（可空）
+func (f *FFmpeg) BurnSubtitles(video, srtFile, output string, forceStyle string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), f.Timeout)
 	defer cancel()
 	// subtitles filter，路径中的特殊字符需要转义冒号和反斜杠
 	escaped := strings.ReplaceAll(srtFile, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, ":", "\\:")
+	filter := "subtitles='" + escaped + "'"
+	if forceStyle != "" {
+		filter += ":force_style='" + forceStyle + "'"
+	}
 	args := []string{
 		"-i", video,
-		"-vf", "subtitles='" + escaped + "'",
+		"-vf", filter,
 		"-c:a", "copy",
 		"-y", output,
 	}
