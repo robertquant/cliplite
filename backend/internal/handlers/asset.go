@@ -32,9 +32,16 @@ func (h *Handlers) ListAssets(c *gin.Context) {
 	assets := []models.Asset{}
 	for rows.Next() {
 		var a models.Asset
-		if err := rows.Scan(&a.ID, &a.Type, &a.Filename, &a.Duration, &a.Width, &a.Height, &a.Codec, &a.SizeBytes, &a.CreatedAt); err != nil {
+		var dur sql.NullFloat64
+		var width, height sql.NullInt64
+		var codec sql.NullString
+		if err := rows.Scan(&a.ID, &a.Type, &a.Filename, &dur, &width, &height, &codec, &a.SizeBytes, &a.CreatedAt); err != nil {
 			continue
 		}
+		a.Duration = dur.Float64
+		a.Width = int(width.Int64)
+		a.Height = int(height.Int64)
+		a.Codec = codec.String
 		assets = append(assets, a)
 	}
 	c.JSON(200, assets)
@@ -98,13 +105,20 @@ func (h *Handlers) GetAsset(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var a models.Asset
 	var path string
+	var dur sql.NullFloat64
+	var width, height sql.NullInt64
+	var codec sql.NullString
 	err := h.DB.QueryRow(
 		`SELECT id, type, filename, duration, width, height, codec, size_bytes, created_at, storage_path FROM assets WHERE id=?`, id,
-	).Scan(&a.ID, &a.Type, &a.Filename, &a.Duration, &a.Width, &a.Height, &a.Codec, &a.SizeBytes, &a.CreatedAt, &path)
+	).Scan(&a.ID, &a.Type, &a.Filename, &dur, &width, &height, &codec, &a.SizeBytes, &a.CreatedAt, &path)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "素材不存在"})
 		return
 	}
+	a.Duration = dur.Float64
+	a.Width = int(width.Int64)
+	a.Height = int(height.Int64)
+	a.Codec = codec.String
 	a.Thumbnail = "/api/assets/" + strconv.FormatInt(id, 10) + "/file"
 	c.JSON(200, a)
 }
@@ -140,10 +154,16 @@ func (h *Handlers) ExtractAudio(c *gin.Context) {
 		return
 	}
 
+	// 探测音频时长
+	var duration float64
+	if p, err := h.FFmpeg.ProbeMedia(outPath); err == nil {
+		duration = p.Duration
+	}
+
 	// 记录为新素材
 	res, _ := h.DB.Exec(
-		`INSERT INTO assets (type, filename, storage_path, size_bytes) VALUES ('audio', ?, ?, ?)`,
-		"extracted_"+filepath.Base(outPath), outPath, fileSize(outPath),
+		`INSERT INTO assets (type, filename, storage_path, duration, size_bytes) VALUES ('audio', ?, ?, ?, ?)`,
+		"extracted_"+filepath.Base(outPath), outPath, duration, fileSize(outPath),
 	)
 	newID, _ := res.LastInsertId()
 
@@ -151,6 +171,7 @@ func (h *Handlers) ExtractAudio(c *gin.Context) {
 		"asset_id": newID,
 		"path":     "/api/assets/" + strconv.FormatInt(newID, 10) + "/file",
 		"format":   format,
+		"duration": duration,
 	})
 }
 
