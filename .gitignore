@@ -1,6 +1,7 @@
 # Go
 backend/cliplite-server
 backend/data/
+data/
 *.db
 *.db-wal
 *.db-shm
@@ -12,4 +13,6 @@ frontend/dist/
 # OS
 .DS_Store
 *.log
+*.log.*
 tsconfig.tsbuildinfo
+*.pid
