@@ -254,6 +254,9 @@ export default function App() {
 
   // 当前激活片段（驱动预览）
   const activeClip = findVideoClipAt(playhead);
+  // 用 ref 在 rAF 里拿最新值，避免闭包过期
+  const activeClipRef = useRef<ActiveClipInfo | null>(activeClip);
+  activeClipRef.current = activeClip;
 
   // 拖/点时间轴 → 设播放头
   const seekToMouse = (e: React.MouseEvent) => {
@@ -273,40 +276,23 @@ export default function App() {
     if (v) v.pause();
   }, []);
 
-  // 播放：rAF 推进播放头，跨片段自动切换素材并 seek
-  const togglePlay = () => {
-    if (isPlaying) { stopPlayback(); return; }
-    const dur = totalDuration();
-    if (dur <= 0) return;
-    if (playhead >= dur) setPlayhead(0);
-    setIsPlaying(true);
-  };
-
-  // 播放循环：根据视频 currentTime 同步播放头
+  // 播放循环：根据视频 currentTime 同步播放头，跨片段自动切换
   useEffect(() => {
     if (!isPlaying) return;
-    const v = videoRef.current;
-    if (!v) return;
-
     const tick = () => {
-      const info = findVideoClipAt(playhead);
+      const v = videoRef.current;
+      const info = activeClipRef.current;
       const dur = totalDuration();
-      if (!info || playhead >= dur) {
-        stopPlayback();
-        setPlayhead(dur);
-        return;
-      }
-      // 视频是否还在当前片段范围内
-      const clipDur = info.clip.timeline_end - info.clip.timeline_start;
-      const elapsedInClip = playhead - info.clip.timeline_start;
-      if (elapsedInClip >= clipDur - 0.05) {
-        // 进入下一片段
-        const next = playhead + 0.05;
-        setPlayhead(Math.min(next, dur));
-      } else {
-        // 用视频 currentTime 推进
-        const newT = info.clip.timeline_start + (v.currentTime - (info.clip.source_start || 0));
-        if (!isNaN(newT) && v.currentTime > 0) setPlayhead(newT);
+      if (!v || !info) { rafRef.current = requestAnimationFrame(tick); return; }
+      // 用视频 currentTime 反推时间轴位置
+      const tl = info.clip.timeline_start + (v.currentTime - (info.clip.source_start || 0));
+      if (!isNaN(tl)) setPlayhead(tl);
+      // 片段播完：推进到下一片段（触发 activeClip 切换 → video remount → onCanPlay 续播）
+      const clipEnd = info.clip.source_end || (info.clip.source_start || 0) + (info.clip.timeline_end - info.clip.timeline_start);
+      if (v.currentTime >= clipEnd - 0.05 || tl >= dur) {
+        const next = Math.min(tl + 0.05, dur);
+        setPlayhead(next);
+        if (next >= dur) { stopPlayback(); return; }
       }
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -314,7 +300,40 @@ export default function App() {
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, [isPlaying]);
 
-  // 暂停时：把视频 seek 到播放头对应的帧
+  // 播放/暂停
+  const togglePlay = async () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (isPlaying) { stopPlayback(); return; }
+    const dur = totalDuration();
+    if (dur <= 0) return;
+    let info = activeClip;
+    if (!info || playhead >= dur) {
+      setPlayhead(0);
+      // 下一帧再播
+      return;
+    }
+    try { v.currentTime = info.offsetInClip; } catch {}
+    try {
+      await v.play();
+      setIsPlaying(true);
+    } catch (e) {
+      message.warning('浏览器阻止了自动播放，请再点一次播放');
+    }
+  };
+
+  // 视频加载就绪：seek 到片段偏移；若处于播放态则继续播
+  const onVideoReady = () => {
+    const v = videoRef.current;
+    if (!v || !activeClipRef.current) return;
+    const off = activeClipRef.current.offsetInClip;
+    if (Math.abs(v.currentTime - off) > 0.1) {
+      try { v.currentTime = off; } catch {}
+    }
+    if (isPlaying) v.play().catch(() => {});
+  };
+
+  // 暂停时：把视频 seek 到播放头对应的帧（所见即所得）
   useEffect(() => {
     if (isPlaying) return;
     const v = videoRef.current;
@@ -391,11 +410,10 @@ export default function App() {
                     key={activeClip.asset.id}
                     ref={videoRef}
                     src={cliplite.assetFileUrl(activeClip.asset.id)}
-                    onPlay={() => setIsPlaying(true)}
+                    onLoadedData={onVideoReady}
                     onPause={() => setIsPlaying(false)}
                     onEnded={() => stopPlayback()}
                     style={{ maxWidth: '100%', maxHeight: '56vh' }}
-                    muted={false}
                   />
                 ) : (
                   <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>播放头不在视频片段上，点击时间轴选择位置</div></div>
