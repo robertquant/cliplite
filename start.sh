@@ -10,7 +10,7 @@ set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
-PORT="${CLIPLITE_PORT:-8765}"
+PORT="${CLIPLITE_PORT:-16014}"
 DATA_DIR="${CLIPLITE_DATA_DIR:-$ROOT/data}"
 LOG_FILE="/tmp/cliplite.log"
 PID_FILE="/tmp/cliplite.pid"
@@ -58,7 +58,7 @@ case "${1:-start}" in
     # 启动后端
     ( cd "$BACKEND" && go run . ) &
     BACKEND_PID=$!
-    # 启动前端 dev server（已配置代理到 8765）
+    # 启动前端 dev server（已配置代理到 16014）
     ( cd "$FRONTEND" && npm run dev ) &
     FRONTEND_PID=$!
     trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null" EXIT INT TERM

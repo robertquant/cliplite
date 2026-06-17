@@ -356,10 +356,10 @@ cliplite-server (单个可执行文件，~30MB)
 ├── embed.FS 嵌入 React build 产物
 ├── 启动时初始化 data.db (SQLite)
 ├── 创建 storage/ 目录
-└── 监听 :8080
+└── 监听 :16014
 ```
 
-启动一行：`./cliplite-server`，访问 `http://your-server:8080` 即用。
+启动一行：`./cliplite-server`，访问 `http://your-server:16014` 即用。
 Docker 化可选：`Dockerfile` + volume 挂载 `data.db` 和 `storage/`。
 
 ### 5.8 关键约束与应对

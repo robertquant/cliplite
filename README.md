@@ -48,7 +48,7 @@ brew install ffmpeg
 
 脚本会自动：检查依赖 → 构建前端 → 构建后端 → 启动服务。
 
-访问 **http://localhost:8765** 即可使用。
+访问 **http://localhost:16014** 即可使用。
 
 #### 其他模式
 
@@ -62,7 +62,7 @@ brew install ffmpeg
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `CLIPLITE_PORT` | 8765 | 服务端口 |
+| `CLIPLITE_PORT` | 16014 | 服务端口 |
 | `CLIPLITE_DATA_DIR` | ./data | 数据库 + 素材目录 |
 | `CLIPLITE_FRONTEND_DIR` | ../frontend/dist | 前端静态文件目录 |
 
