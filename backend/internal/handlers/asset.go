@@ -123,6 +123,35 @@ func (h *Handlers) GetAsset(c *gin.Context) {
 	c.JSON(200, a)
 }
 
+// DeleteAsset DELETE /api/assets/:id — 删除素材（DB 记录 + 文件 + 关联片段）
+func (h *Handlers) DeleteAsset(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+
+	// 先拿到文件路径
+	var storagePath string
+	err := h.DB.QueryRow(`SELECT storage_path FROM assets WHERE id=?`, id).Scan(&storagePath)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "素材不存在"})
+		return
+	}
+
+	// 删除引用该素材的片段（避免悬空引用）
+	h.DB.Exec(`DELETE FROM clips WHERE asset_id=?`, id)
+
+	// 删除 DB 记录
+	if _, err := h.DB.Exec(`DELETE FROM assets WHERE id=?`, id); err != nil {
+		c.JSON(500, gin.H{"error": "删除失败: " + err.Error()})
+		return
+	}
+
+	// 删除磁盘文件（忽略错误，文件可能已被删）
+	if storagePath != "" {
+		_ = os.Remove(storagePath)
+	}
+
+	c.JSON(200, gin.H{"ok": true, "id": id})
+}
+
 // ServeAssetFile GET /api/assets/:id/file — 直接返回原文件（预览用）
 func (h *Handlers) ServeAssetFile(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)

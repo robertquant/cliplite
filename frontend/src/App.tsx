@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Button, Upload, message, Tag, Modal, Input, Segmented, Progress, Tooltip, ColorPicker, Select, InputNumber } from 'antd';
+import { Button, Upload, message, Tag, Modal, Input, Segmented, Progress, Tooltip, ColorPicker, Select, InputNumber, Popconfirm } from 'antd';
 import {
   UploadOutlined, VideoCameraOutlined, AudioOutlined,
   PlusOutlined, ReloadOutlined, ExportOutlined, DeleteOutlined,
@@ -133,6 +133,20 @@ export default function App() {
     if (!project) return;
     await cliplite.saveClips(track.id, track.clips.filter((_, i) => i !== clipIndex));
     setProject(await cliplite.getProject(project.project.id));
+  };
+
+  // 删除素材（DB + 文件 + 关联片段）
+  const deleteAsset = async (asset: Asset) => {
+    try {
+      await cliplite.deleteAsset(asset.id);
+      if (selectedAsset?.id === asset.id) setSelectedAsset(null);
+      await refreshAssets();
+      // 若工程引用了该素材，刷新工程
+      if (project) setProject(await cliplite.getProject(project.project.id));
+      message.success('已删除素材');
+    } catch (e: any) {
+      message.error('删除失败: ' + (e?.message || ''));
+    }
   };
 
   // 拖拽重排序（重新计算时间轴位置）
@@ -382,6 +396,17 @@ export default function App() {
               <Tooltip title="加到时间轴">
                 <PlusCircleOutlined onClick={(e) => { e.stopPropagation(); addAssetToTimeline(a); }} style={{ color: '#22d3ee', fontSize: 16, marginLeft: 8 }} />
               </Tooltip>
+              <Popconfirm
+                title="删除该素材？"
+                description="将同时删除素材文件和时间轴中引用它的片段"
+                okText="删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={(e) => { e?.stopPropagation(); deleteAsset(a); }}
+                onCancel={(e) => e?.stopPropagation()}
+              >
+                <DeleteOutlined onClick={(e) => e.stopPropagation()} style={{ color: '#71717a', fontSize: 14, marginLeft: 6 }} />
+              </Popconfirm>
             </div>
           ))}
           {selectedAsset && selectedAsset.type === 'video' && (

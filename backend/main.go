@@ -60,6 +60,7 @@ func main() {
 		api.GET("/assets", h.ListAssets)
 		api.POST("/assets", h.UploadAsset)
 		api.GET("/assets/:id", h.GetAsset)
+		api.DELETE("/assets/:id", h.DeleteAsset)
 		api.GET("/assets/:id/file", h.ServeAssetFile)
 		api.POST("/assets/:id/extract-audio", h.ExtractAudio)
 
