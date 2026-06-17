@@ -58,3 +58,11 @@ export interface HealthStatus {
   ffprobe: boolean;
   ffmpeg_error: string;
 }
+
+export interface RenderStatus {
+  project_id: number;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  progress: number;
+  error?: string;
+  download_url?: string;
+}

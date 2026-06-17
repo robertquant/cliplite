@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/cliplite/backend/internal/config"
 	"github.com/cliplite/backend/internal/db"
@@ -69,10 +71,41 @@ func main() {
 
 		// 片段
 		api.PUT("/clips/:trackId", h.SaveClips)
+
+		// 渲染
+		api.POST("/render", h.Render)
+		api.GET("/render/:projectId", h.RenderStatus)
+		api.GET("/render/:projectId/download", h.RenderDownload)
 	}
 
-	log.Printf("🚀 ClipLite 后端启动: http://0.0.0.0:%s", cfg.Port)
+	// 托管前端静态文件（dist 目录）。CLIPLITE_FRONTEND_DIR 可覆盖
+	frontendDir := getEnv("CLIPLITE_FRONTEND_DIR", "../frontend/dist")
+	if _, err := os.Stat(frontendDir); err == nil {
+		r.Static("/assets", filepath.Join(frontendDir, "assets"))
+		r.GET("/", func(c *gin.Context) {
+			c.File(filepath.Join(frontendDir, "index.html"))
+		})
+		// SPA fallback：未匹配的路由返回 index.html
+		r.NoRoute(func(c *gin.Context) {
+			p := filepath.Join(frontendDir, c.Request.URL.Path)
+			if _, err := os.Stat(p); err == nil {
+				c.File(p)
+				return
+			}
+			c.File(filepath.Join(frontendDir, "index.html"))
+		})
+		log.Printf("前端静态文件: %s", frontendDir)
+	}
+
+	log.Printf("🚀 ClipLite 启动: http://0.0.0.0:%s", cfg.Port)
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

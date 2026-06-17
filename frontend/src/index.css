@@ -49,6 +49,40 @@ body {
 .clip-block.audio { background: linear-gradient(135deg, #0891b2, #06b6d4); }
 .clip-block.subtitle { background: linear-gradient(135deg, #ca8a04, #eab308); color: #000; }
 .empty-hint { color: #71717a; text-align: center; padding: 40px; }
+
+/* 时间标尺 */
+.ruler {
+  height: 20px; position: relative; margin-left: 88px; margin-bottom: 4px;
+  border-bottom: 1px solid #3f3f46;
+}
+.ruler-tick {
+  position: absolute; top: 0; font-size: 9px; color: #71717a;
+  padding-left: 2px;
+}
+.ruler-tick::before {
+  content: ''; position: absolute; left: 0; top: 14px;
+  width: 1px; height: 6px; background: #52525b;
+}
+
+/* 片段块增强 */
+.clip-block { transition: filter 0.12s; }
+.clip-block:hover { filter: brightness(1.15); }
+.clip-text { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.clip-del {
+  opacity: 0; margin-left: 6px; font-size: 12px;
+  padding: 2px; border-radius: 3px;
+}
+.clip-block:hover .clip-del { opacity: 0.8; }
+.clip-del:hover { opacity: 1; background: rgba(0,0,0,0.3); }
+.track-empty {
+  padding: 10px 12px; color: #52525b; font-size: 11px;
+  font-style: italic;
+}
+
+/* 隐藏 antd 上传的滚动条美化 */
+.timeline-area::-webkit-scrollbar { height: 8px; }
+.timeline-area::-webkit-scrollbar-track { background: #18181b; }
+.timeline-area::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
 .asset-item {
   padding: 8px 10px; margin-bottom: 6px; background: #27272a;
   border-radius: 6px; cursor: pointer; font-size: 12px;

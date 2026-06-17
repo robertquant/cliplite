@@ -61,6 +61,13 @@ func (s *Storage) NewPath(subdir, ext string) string {
 	return filepath.Join(s.Root, subdir, randName()+ext)
 }
 
+// NewDir 创建一个临时子目录并返回路径
+func (s *Storage) NewDir(subdir string) string {
+	dir := filepath.Join(s.Root, subdir, randName())
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
 func randName() string {
 	b := make([]byte, 8)
 	rand.Read(b)

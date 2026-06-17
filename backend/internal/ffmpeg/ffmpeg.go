@@ -141,6 +141,79 @@ func (f *FFmpeg) Concat(listFile, output string, reencode bool) error {
 	return nil
 }
 
+// MixAudio 将背景音乐混入视频。audioVolume 背景音乐音量(0.0-2.0)，keepOriginal 是否保留原视频声音
+func (f *FFmpeg) MixAudio(video, audio, output string, audioVolume float64, keepOriginal bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), f.Timeout)
+	defer cancel()
+	vol := fmt.Sprintf("%.2f", audioVolume)
+	var args []string
+	if keepOriginal {
+		// 原音 + 背景音乐混合
+		args = []string{
+			"-i", video, "-i", audio,
+			"-filter_complex", "[0:a]volume=1.0[a0];[1:a]volume=" + vol + "[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
+			"-map", "0:v", "-map", "[aout]",
+			"-c:v", "copy", "-c:a", "aac",
+		}
+	} else {
+		// 替换为背景音乐
+		args = []string{
+			"-i", video, "-i", audio,
+			"-filter_complex", "[1:a]volume=" + vol + "[aout]",
+			"-map", "0:v", "-map", "[aout]",
+			"-c:v", "copy", "-c:a", "aac",
+			"-shortest",
+		}
+	}
+	args = append(args, "-y", output)
+	cmd := exec.CommandContext(ctx, f.Bin, args...)
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mix audio failed: %w: %s", err, string(combined))
+	}
+	return nil
+}
+
+// BurnSubtitles 用 SRT 字幕文件烧录到视频（硬字幕）
+func (f *FFmpeg) BurnSubtitles(video, srtFile, output string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), f.Timeout)
+	defer cancel()
+	// subtitles filter，路径中的特殊字符需要转义冒号和反斜杠
+	escaped := strings.ReplaceAll(srtFile, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, ":", "\\:")
+	args := []string{
+		"-i", video,
+		"-vf", "subtitles='" + escaped + "'",
+		"-c:a", "copy",
+		"-y", output,
+	}
+	cmd := exec.CommandContext(ctx, f.Bin, args...)
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("burn subtitles failed: %w: %s", err, string(combined))
+	}
+	return nil
+}
+
+// Trim 按源内时间范围裁剪素材（用于片段截取）
+func (f *FFmpeg) Trim(input, output string, start, end float64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), f.Timeout)
+	defer cancel()
+	args := []string{
+		"-ss", fmt.Sprintf("%.3f", start),
+		"-to", fmt.Sprintf("%.3f", end),
+		"-i", input,
+		"-c", "copy",
+		"-y", output,
+	}
+	cmd := exec.CommandContext(ctx, f.Bin, args...)
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("trim failed: %w: %s", err, string(combined))
+	}
+	return nil
+}
+
 // Available 检查 ffmpeg/ffprobe 是否可用
 func (f *FFmpeg) Available() error {
 	if _, err := exec.LookPath(f.Bin); err != nil {

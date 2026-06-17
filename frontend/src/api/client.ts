@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Asset, HealthStatus, Project, ProjectDetail, Clip } from '../types';
+import type { Asset, HealthStatus, Project, ProjectDetail, Clip, RenderStatus } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -37,4 +37,11 @@ export const cliplite = {
   // 片段
   saveClips: (trackId: number, clips: Clip[]) =>
     api.put(`/clips/${trackId}`, clips),
+
+  // 渲染
+  startRender: (projectId: number) =>
+    api.post('/render', { project_id: projectId }).then(r => r.data),
+  renderStatus: (projectId: number) =>
+    api.get<RenderStatus>(`/render/${projectId}`).then(r => r.data),
+  renderDownloadUrl: (projectId: number) => `/api/render/${projectId}/download`,
 };
