@@ -4,10 +4,11 @@ import {
   UploadOutlined, VideoCameraOutlined, AudioOutlined,
   PlusOutlined, ReloadOutlined, ExportOutlined, DeleteOutlined,
   PlusCircleOutlined, FontSizeOutlined, FolderOpenOutlined,
-  ZoomInOutlined, ZoomOutOutlined,
+  ZoomInOutlined, ZoomOutOutlined, PlayCircleOutlined, PauseCircleOutlined,
+  StepBackwardOutlined, StepForwardOutlined,
 } from '@ant-design/icons';
 import { cliplite } from './api/client';
-import type { Asset, ProjectDetail, HealthStatus, Clip, Track, TextStyle } from './types';
+import type { Asset, ProjectDetail, HealthStatus, Clip, Track, TextStyle, ActiveClipInfo } from './types';
 
 const FONT_OPTIONS = ['Arial', 'Helvetica', 'SimHei', 'Microsoft YaHei', 'SimSun', 'Georgia', 'Times New Roman', 'Courier New'];
 
@@ -22,6 +23,13 @@ export default function App() {
 
   // 时间轴缩放（每秒像素数）
   const [pxPerSec, setPxPerSec] = useState(24);
+
+  // 时间轴播放头 + 播放
+  const [playhead, setPlayhead] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const timelineLaneRef = useRef<HTMLDivElement | null>(null);
 
   // 渲染
   const [rendering, setRendering] = useState(false);
@@ -227,6 +235,98 @@ export default function App() {
     catch { return {}; }
   };
 
+  // === 时间轴播放头 / 预览 ===
+  // 找覆盖某时间点的视频片段 + 对应素材 + 片段内偏移
+  const findVideoClipAt = useCallback((time: number): ActiveClipInfo | null => {
+    if (!project) return null;
+    const vtrack = project.tracks.find(t => t.type === 'video');
+    if (!vtrack) return null;
+    for (const clip of vtrack.clips) {
+      if (time >= clip.timeline_start && time < clip.timeline_end) {
+        const asset = assets.find(a => a.id === clip.asset_id);
+        if (!asset) continue;
+        const offset = (clip.source_start || 0) + (time - clip.timeline_start);
+        return { clip, asset, offsetInClip: Math.max(0, offset) };
+      }
+    }
+    return null;
+  }, [project, assets]);
+
+  // 当前激活片段（驱动预览）
+  const activeClip = findVideoClipAt(playhead);
+
+  // 拖/点时间轴 → 设播放头
+  const seekToMouse = (e: React.MouseEvent) => {
+    const lane = timelineLaneRef.current;
+    if (!lane) return;
+    const rect = lane.getBoundingClientRect();
+    const t = Math.max(0, (e.clientX - rect.left) / pxPerSec);
+    setPlayhead(Math.min(t, totalDuration()));
+  };
+
+  // 停止播放
+  const stopPlayback = useCallback(() => {
+    setIsPlaying(false);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    const v = videoRef.current;
+    if (v) v.pause();
+  }, []);
+
+  // 播放：rAF 推进播放头，跨片段自动切换素材并 seek
+  const togglePlay = () => {
+    if (isPlaying) { stopPlayback(); return; }
+    const dur = totalDuration();
+    if (dur <= 0) return;
+    if (playhead >= dur) setPlayhead(0);
+    setIsPlaying(true);
+  };
+
+  // 播放循环：根据视频 currentTime 同步播放头
+  useEffect(() => {
+    if (!isPlaying) return;
+    const v = videoRef.current;
+    if (!v) return;
+
+    const tick = () => {
+      const info = findVideoClipAt(playhead);
+      const dur = totalDuration();
+      if (!info || playhead >= dur) {
+        stopPlayback();
+        setPlayhead(dur);
+        return;
+      }
+      // 视频是否还在当前片段范围内
+      const clipDur = info.clip.timeline_end - info.clip.timeline_start;
+      const elapsedInClip = playhead - info.clip.timeline_start;
+      if (elapsedInClip >= clipDur - 0.05) {
+        // 进入下一片段
+        const next = playhead + 0.05;
+        setPlayhead(Math.min(next, dur));
+      } else {
+        // 用视频 currentTime 推进
+        const newT = info.clip.timeline_start + (v.currentTime - (info.clip.source_start || 0));
+        if (!isNaN(newT) && v.currentTime > 0) setPlayhead(newT);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [isPlaying]);
+
+  // 暂停时：把视频 seek 到播放头对应的帧
+  useEffect(() => {
+    if (isPlaying) return;
+    const v = videoRef.current;
+    if (!v || !activeClip) return;
+    if (Math.abs(v.currentTime - activeClip.offsetInClip) > 0.1) {
+      try { v.currentTime = activeClip.offsetInClip; } catch {}
+    }
+  }, [playhead, activeClip, isPlaying]);
+
+  // 切换工程 / 删除片段时停止播放
+  useEffect(() => { stopPlayback(); setPlayhead(0); }, [project?.project.id]);
+
   return (
     <div className="app-layout">
       <div className="app-header">
@@ -283,8 +383,38 @@ export default function App() {
                   <a href={renderUrl} download><Button type="primary" icon={<ExportOutlined />}>下载视频</Button></a>
                 </div>
               </div>
+            ) : project && totalDuration() > 0 ? (
+              // 时间轴驱动预览：显示播放头对应的视频帧
+              <div style={{ textAlign: 'center', width: '100%' }}>
+                {activeClip ? (
+                  <video
+                    key={activeClip.asset.id}
+                    ref={videoRef}
+                    src={cliplite.assetFileUrl(activeClip.asset.id)}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onEnded={() => stopPlayback()}
+                    style={{ maxWidth: '100%', maxHeight: '56vh' }}
+                    muted={false}
+                  />
+                ) : (
+                  <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>播放头不在视频片段上，点击时间轴选择位置</div></div>
+                )}
+                {/* 播放控制条 */}
+                <div className="playback-bar">
+                  <Button shape="circle" icon={<StepBackwardOutlined />} disabled={playhead <= 0}
+                    onClick={() => { stopPlayback(); setPlayhead(0); }} />
+                  <Button shape="circle" size="large" type="primary"
+                    icon={isPlaying ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                    disabled={!activeClip}
+                    onClick={togglePlay} />
+                  <Button shape="circle" icon={<StepForwardOutlined />} disabled={playhead >= totalDuration()}
+                    onClick={() => { stopPlayback(); setPlayhead(totalDuration()); }} />
+                  <span className="time-readout">{fmtDuration(playhead)} / {fmtDuration(totalDuration())}</span>
+                </div>
+              </div>
             ) : !selectedAsset ? (
-              <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>从左侧选择素材预览</div></div>
+              <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>从左侧选择素材预览，或添加片段到时间轴</div></div>
             ) : selectedAsset.type === 'video' ? (
               <video key={selectedAsset.id} src={cliplite.assetFileUrl(selectedAsset.id)} controls autoPlay />
             ) : (
@@ -316,20 +446,32 @@ export default function App() {
 
             {rendering && <Progress percent={renderProgress} size="small" style={{ marginBottom: 8 }} status="active" />}
 
-            {/* 时间标尺 */}
-            <div className="ruler" style={{ width: timelineWidth }}>
+            {/* 时间标尺（可点击定位播放头）*/}
+            <div className="ruler" style={{ width: timelineWidth }} onClick={seekToMouse}>
               {Array.from({ length: Math.ceil(totalDuration() / 5) + 1 }).map((_, i) => (
                 <div key={i} className="ruler-tick" style={{ left: i * 5 * pxPerSec }}><span>{fmtDuration(i * 5)}</span></div>
               ))}
+              {/* 播放头标尺指示 */}
+              {totalDuration() > 0 && (
+                <div className="playhead-marker" style={{ left: playhead * pxPerSec }} title={fmtDuration(playhead)} />
+              )}
             </div>
 
             {tracks.map((track: Track) => (
               <div className="track" key={track.id}>
                 <div className="track-label">{track.type === 'video' ? '🎬 视频' : track.type === 'audio' ? '🎵 音乐' : '💬 字幕'}</div>
-                <div className="track-lane" style={{ width: timelineWidth }}
+                <div
+                  className="track-lane"
+                  ref={track.type === 'video' ? timelineLaneRef : undefined}
+                  style={{ width: timelineWidth, cursor: project ? 'pointer' : 'default' }}
+                  onClick={project ? seekToMouse : undefined}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => { setDragOverIndex(null); }}
                 >
+                  {/* 播放头竖线（贯穿每个轨道）*/}
+                  {project && totalDuration() > 0 && (
+                    <div className="playhead-line" style={{ left: playhead * pxPerSec }} />
+                  )}
                   {track.clips && track.clips.length > 0 ? (
                     track.clips.map((clip: Clip, i: number) => {
                       const st = parseStyle(clip);

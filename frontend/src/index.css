@@ -84,6 +84,50 @@ body {
 .timeline-area::-webkit-scrollbar-track { background: #18181b; }
 .timeline-area::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
 
+/* 时间轴播放头 */
+.playhead-line {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 2px;
+  background: #ef4444;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: 0 0 4px rgba(239,68,68,0.6);
+}
+.playhead-marker {
+  position: absolute;
+  top: 0;
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #ef4444;
+  transform: translateX(-4px);
+  pointer-events: none;
+  z-index: 5;
+}
+/* 预览区播放控制条 */
+.playback-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 10px;
+  background: #18181b;
+  border-radius: 8px;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+.playback-bar .time-readout {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+  color: #e4e4e7;
+  margin-left: 4px;
+  min-width: 110px;
+  text-align: center;
+}
+
 /* 拖拽中的片段块 */
 .clip-block { cursor: grab; }
 .clip-block:active { cursor: grabbing; }
