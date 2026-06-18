@@ -24,6 +24,32 @@ export default function App() {
   // 时间轴缩放（每秒像素数）
   const [pxPerSec, setPxPerSec] = useState(24);
 
+  // 素材库侧边栏宽度（可拖拽调整）
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const draggingRef = useRef(false);
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return;
+      // sidebar 从窗口左边算起，限制 200-560px
+      const w = Math.min(560, Math.max(200, ev.clientX));
+      setSidebarWidth(w);
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   // 时间轴播放头 + 播放
   const [playhead, setPlayhead] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -391,7 +417,7 @@ export default function App() {
       </div>
 
       <div className="app-body">
-        <div className="sidebar">
+        <div className="sidebar" style={{ width: sidebarWidth, flexShrink: 0 }}>
           <div style={{ marginBottom: 12, fontWeight: 600, color: '#a1a1aa' }}>素材库 ({assets.length})</div>
           {assets.length === 0 && (
             <div style={{ color: '#71717a', fontSize: 12, padding: 16, textAlign: 'center' }}>点击右上角"导入素材"上传视频/音频</div>
@@ -399,7 +425,7 @@ export default function App() {
           {assets.map(a => (
             <div key={a.id} className="asset-item" onClick={() => setSelectedAsset(a)} style={selectedAsset?.id === a.id ? { background: '#52525b' } : {}}>
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.filename}>
                   {a.type === 'video' ? <VideoCameraOutlined /> : <AudioOutlined />} {a.filename}
                 </div>
                 <div style={{ color: '#71717a', fontSize: 10 }}>{fmtDuration(a.duration)} · {a.width > 0 ? `${a.width}x${a.height}` : 'audio'}</div>
@@ -438,6 +464,9 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* 可拖拽分隔条 */}
+        <div className="sidebar-resizer" onMouseDown={startResize} title="拖动调整素材库宽度" />
 
         <div className="main-content">
           <div className="preview-area">
