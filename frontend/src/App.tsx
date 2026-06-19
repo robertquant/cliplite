@@ -31,6 +31,9 @@ export default function App() {
   // 预览模式：'asset'(单素材) | 'timeline'(时间轴成片)
   const [previewMode, setPreviewMode] = useState<'asset' | 'timeline'>('asset');
 
+  // 提取音频的格式选择（仅状态，不立即触发）
+  const [extractFormat, setExtractFormat] = useState<'mp3' | 'wav' | 'aac'>('mp3');
+
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
     draggingRef.current = true;
@@ -455,7 +458,10 @@ export default function App() {
             <div style={{ marginTop: 16, padding: 12, background: '#27272a', borderRadius: 8 }}>
               <div style={{ fontSize: 11, color: '#a1a1aa', marginBottom: 8 }}>音视频处理：</div>
               <div style={{ fontSize: 11, color: '#71717a', marginBottom: 6 }}>提取音频（保存为独立音频文件）</div>
-              <Segmented options={[{ label: 'MP3', value: 'mp3' }, { label: 'WAV', value: 'wav' }, { label: 'AAC', value: 'aac' }]} onChange={(v) => handleExtractAudio(selectedAsset, v as any)} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Segmented value={extractFormat} onChange={(v) => setExtractFormat(v as any)} options={[{ label: 'MP3', value: 'mp3' }, { label: 'WAV', value: 'wav' }, { label: 'AAC', value: 'aac' }]} />
+                <Button size="small" type="primary" icon={<ExportOutlined />} onClick={() => handleExtractAudio(selectedAsset, extractFormat)}>提取</Button>
+              </div>
               <div style={{ borderTop: '1px solid #3f3f46', margin: '12px 0 8px' }} />
               <div style={{ fontSize: 11, color: '#71717a', marginBottom: 6 }}>去除声音（只保留画面，生成无声视频）</div>
               <Popconfirm
