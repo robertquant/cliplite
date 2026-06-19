@@ -5,7 +5,7 @@ import {
   PlusOutlined, ReloadOutlined, ExportOutlined, DeleteOutlined,
   PlusCircleOutlined, FontSizeOutlined, FolderOpenOutlined,
   ZoomInOutlined, ZoomOutOutlined, PlayCircleOutlined, PauseCircleOutlined,
-  StepBackwardOutlined, StepForwardOutlined, AudioMutedOutlined,
+  StepBackwardOutlined, StepForwardOutlined, AudioMutedOutlined, CloseOutlined,
 } from '@ant-design/icons';
 import { cliplite } from './api/client';
 import type { Asset, ProjectDetail, HealthStatus, Clip, Track, TextStyle, ActiveClipInfo } from './types';
@@ -90,6 +90,13 @@ export default function App() {
   useEffect(() => {
     cliplite.health().then(setHealth).catch(() => {});
     refreshAssets();
+    // 刷新自动恢复上次打开的工程
+    const lastId = localStorage.getItem('cliplite.lastProjectId');
+    if (lastId) {
+      cliplite.getProject(Number(lastId))
+        .then(p => { setProject(p); message.info(`已恢复工程：${p.project.name}`, 2); })
+        .catch(() => localStorage.removeItem('cliplite.lastProjectId')); // 工程已删则清除
+    }
   }, []);
 
   const refreshAssets = () => cliplite.listAssets().then(setAssets);
@@ -133,6 +140,7 @@ export default function App() {
       const p = await cliplite.createProject(projectName || '未命名工程');
       setProject(p);
       setRenderUrl(null);
+      localStorage.setItem('cliplite.lastProjectId', String(p.project.id));
       message.success(`工程已创建: ${p.project.name}`);
       setCreating(false);
       setProjectName('');
@@ -150,8 +158,20 @@ export default function App() {
     const p = await cliplite.getProject(id);
     setProject(p);
     setRenderUrl(null);
+    localStorage.setItem('cliplite.lastProjectId', String(id));
     setProjectListOpen(false);
     message.success(`已打开: ${p.project.name}`);
+  };
+
+  // 关闭工程（主动退出，不再自动恢复）
+  const closeProject = () => {
+    stopPlayback();
+    setProject(null);
+    setSelectedAsset(null);
+    setRenderUrl(null);
+    setPlayhead(0);
+    localStorage.removeItem('cliplite.lastProjectId');
+    message.success('已关闭工程');
   };
 
   // 添加素材到时间轴
@@ -421,6 +441,7 @@ export default function App() {
         </Upload>
         <Button icon={<PlusOutlined />} onClick={() => setCreating(true)}>新建工程</Button>
         <Button icon={<FolderOpenOutlined />} onClick={loadProjectList}>打开工程</Button>
+        {project && <Button danger ghost icon={<CloseOutlined />} onClick={closeProject}>关闭工程</Button>}
         <Button icon={<ReloadOutlined />} onClick={refreshAssets} />
       </div>
 
