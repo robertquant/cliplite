@@ -28,6 +28,9 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const draggingRef = useRef(false);
 
+  // 预览模式：'asset'(单素材) | 'timeline'(时间轴成片)
+  const [previewMode, setPreviewMode] = useState<'asset' | 'timeline'>('asset');
+
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
     draggingRef.current = true;
@@ -309,13 +312,14 @@ export default function App() {
   const activeClipRef = useRef<ActiveClipInfo | null>(activeClip);
   activeClipRef.current = activeClip;
 
-  // 拖/点时间轴 → 设播放头
+  // 拖/点时间轴 → 设播放头 + 切到时间轴预览
   const seekToMouse = (e: React.MouseEvent) => {
     const lane = timelineLaneRef.current;
     if (!lane) return;
     const rect = lane.getBoundingClientRect();
     const t = Math.max(0, (e.clientX - rect.left) / pxPerSec);
     setPlayhead(Math.min(t, totalDuration()));
+    setPreviewMode('timeline');
   };
 
   // 停止播放
@@ -353,6 +357,7 @@ export default function App() {
 
   // 播放/暂停
   const togglePlay = async () => {
+    setPreviewMode('timeline');
     const v = videoRef.current;
     if (!v) return;
     if (isPlaying) { stopPlayback(); return; }
@@ -423,7 +428,7 @@ export default function App() {
             <div style={{ color: '#71717a', fontSize: 12, padding: 16, textAlign: 'center' }}>点击右上角"导入素材"上传视频/音频</div>
           )}
           {assets.map(a => (
-            <div key={a.id} className="asset-item" onClick={() => setSelectedAsset(a)} style={selectedAsset?.id === a.id ? { background: '#52525b' } : {}}>
+            <div key={a.id} className="asset-item" onClick={() => { setSelectedAsset(a); setPreviewMode('asset'); }} style={selectedAsset?.id === a.id ? { background: '#52525b' } : {}}>
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.filename}>
                   {a.type === 'video' ? <VideoCameraOutlined /> : <AudioOutlined />} {a.filename}
@@ -478,9 +483,18 @@ export default function App() {
                   <a href={renderUrl} download><Button type="primary" icon={<ExportOutlined />}>下载视频</Button></a>
                 </div>
               </div>
-            ) : project && totalDuration() > 0 ? (
+            ) : previewMode === 'timeline' && project && totalDuration() > 0 ? (
               // 时间轴驱动预览：显示播放头对应的视频帧
               <div style={{ textAlign: 'center', width: '100%' }}>
+                {/* 模式切换提示 */}
+                <div className="preview-mode-hint">
+                  <span>⏱ 时间轴预览</span>
+                  {selectedAsset && (
+                    <Button type="link" size="small" onClick={() => setPreviewMode('asset')}>
+                      ← 返回素材预览（{selectedAsset.filename.slice(0, 16)}）
+                    </Button>
+                  )}
+                </div>
                 {activeClip ? (
                   <video
                     key={activeClip.asset.id}
@@ -509,13 +523,26 @@ export default function App() {
               </div>
             ) : !selectedAsset ? (
               <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>从左侧选择素材预览，或添加片段到时间轴</div></div>
-            ) : selectedAsset.type === 'video' ? (
-              <video key={selectedAsset.id} src={cliplite.assetFileUrl(selectedAsset.id)} controls autoPlay />
             ) : (
-              <div style={{ textAlign: 'center' }}>
-                <AudioOutlined style={{ fontSize: 64, color: '#06b6d4' }} />
-                <div style={{ marginTop: 16 }}>{selectedAsset.filename}</div>
-                <audio src={cliplite.assetFileUrl(selectedAsset.id)} controls style={{ marginTop: 16 }} />
+              <div style={{ textAlign: 'center', width: '100%' }}>
+                {/* 素材预览模式 + 可切换到时间轴 */}
+                {project && totalDuration() > 0 && (
+                  <div className="preview-mode-hint">
+                    <span>🎬 素材预览：{selectedAsset.filename}</span>
+                    <Button type="link" size="small" onClick={() => setPreviewMode('timeline')}>
+                      切换到时间轴预览 →
+                    </Button>
+                  </div>
+                )}
+                {selectedAsset.type === 'video' ? (
+                  <video key={selectedAsset.id} src={cliplite.assetFileUrl(selectedAsset.id)} controls autoPlay style={{ maxWidth: '100%', maxHeight: '60vh' }} />
+                ) : (
+                  <div>
+                    <AudioOutlined style={{ fontSize: 64, color: '#06b6d4' }} />
+                    <div style={{ marginTop: 16 }}>{selectedAsset.filename}</div>
+                    <audio src={cliplite.assetFileUrl(selectedAsset.id)} controls style={{ marginTop: 16 }} />
+                  </div>
+                )}
               </div>
             )}
           </div>

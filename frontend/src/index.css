@@ -127,6 +127,22 @@ body {
   pointer-events: none;
   z-index: 5;
 }
+/* 预览模式切换提示条 */
+.preview-mode-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #a1a1aa;
+}
+.preview-mode-hint .ant-btn-link {
+  color: #22d3ee !important;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
 /* 预览区播放控制条 */
 .playback-bar {
   display: flex;
