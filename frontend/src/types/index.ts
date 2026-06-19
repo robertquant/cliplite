@@ -56,11 +56,12 @@ export interface Track {
   clips: Clip[];
 }
 
-// 时间轴上一个视频片段，附带其素材时长（用于预览 seek）
+// 时间轴上一个视频/音频片段，附带其素材时长（用于预览 seek）
 export interface ActiveClipInfo {
   clip: Clip;
   asset: Asset;
   offsetInClip: number; // 播放头在片段内的偏移（秒）
+  mediaType: 'video' | 'audio'; // 片段来源轨道类型
 }
 
 export interface ProjectDetail {

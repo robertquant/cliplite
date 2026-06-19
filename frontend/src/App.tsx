@@ -313,24 +313,29 @@ export default function App() {
   };
 
   // === 时间轴播放头 / 预览 ===
-  // 找覆盖某时间点的视频片段 + 对应素材 + 片段内偏移
-  const findVideoClipAt = useCallback((time: number): ActiveClipInfo | null => {
+  // 在指定类型轨道里找覆盖某时间点的片段
+  const findClipInTrack = useCallback((time: number, trackType: 'video' | 'audio'): ActiveClipInfo | null => {
     if (!project) return null;
-    const vtrack = project.tracks.find(t => t.type === 'video');
-    if (!vtrack) return null;
-    for (const clip of vtrack.clips) {
+    const track = project.tracks.find(t => t.type === trackType);
+    if (!track) return null;
+    for (const clip of track.clips) {
       if (time >= clip.timeline_start && time < clip.timeline_end) {
         const asset = assets.find(a => a.id === clip.asset_id);
         if (!asset) continue;
         const offset = (clip.source_start || 0) + (time - clip.timeline_start);
-        return { clip, asset, offsetInClip: Math.max(0, offset) };
+        return { clip, asset, offsetInClip: Math.max(0, offset), mediaType: trackType };
       }
     }
     return null;
   }, [project, assets]);
 
+  // 找覆盖某时间点的片段：优先视频，无视频则音频
+  const findMediaClipAt = useCallback((time: number): ActiveClipInfo | null => {
+    return findClipInTrack(time, 'video') || findClipInTrack(time, 'audio');
+  }, [findClipInTrack]);
+
   // 当前激活片段（驱动预览）
-  const activeClip = findVideoClipAt(playhead);
+  const activeClip = findMediaClipAt(playhead);
   // 用 ref 在 rAF 里拿最新值，避免闭包过期
   const activeClipRef = useRef<ActiveClipInfo | null>(activeClip);
   activeClipRef.current = activeClip;
@@ -523,17 +528,35 @@ export default function App() {
                   )}
                 </div>
                 {activeClip ? (
-                  <video
-                    key={activeClip.asset.id}
-                    ref={videoRef}
-                    src={cliplite.assetFileUrl(activeClip.asset.id)}
-                    onLoadedData={onVideoReady}
-                    onPause={() => setIsPlaying(false)}
-                    onEnded={() => stopPlayback()}
-                    style={{ maxWidth: '100%', maxHeight: '56vh' }}
-                  />
+                  activeClip.mediaType === 'audio' ? (
+                    // 纯音频：用一个可视化占位 + 隐藏的 audio 元素驱动播放
+                    <div className="audio-preview-box">
+                      <AudioOutlined style={{ fontSize: 72, color: '#06b6d4' }} />
+                      <div style={{ marginTop: 16, fontSize: 15 }}>{activeClip.asset.filename}</div>
+                      <div style={{ color: '#71717a', fontSize: 12, marginTop: 4 }}>🎵 音频播放中（无画面）</div>
+                      <video
+                        key={activeClip.asset.id}
+                        ref={videoRef}
+                        src={cliplite.assetFileUrl(activeClip.asset.id)}
+                        onLoadedData={onVideoReady}
+                        onPause={() => setIsPlaying(false)}
+                        onEnded={() => stopPlayback()}
+                        style={{ display: 'none' }}
+                      />
+                    </div>
+                  ) : (
+                    <video
+                      key={activeClip.asset.id}
+                      ref={videoRef}
+                      src={cliplite.assetFileUrl(activeClip.asset.id)}
+                      onLoadedData={onVideoReady}
+                      onPause={() => setIsPlaying(false)}
+                      onEnded={() => stopPlayback()}
+                      style={{ maxWidth: '100%', maxHeight: '56vh' }}
+                    />
+                  )
                 ) : (
-                  <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>播放头不在视频片段上，点击时间轴选择位置</div></div>
+                  <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>播放头不在任何片段上，点击时间轴选择位置</div></div>
                 )}
                 {/* 播放控制条 */}
                 <div className="playback-bar">
