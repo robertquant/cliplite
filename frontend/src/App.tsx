@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Button, Upload, message, Tag, Modal, Input, Segmented, Progress, Tooltip, ColorPicker, Select, InputNumber, Popconfirm } from 'antd';
+import { Button, Upload, message, Tag, Modal, Input, Segmented, Progress, Tooltip, ColorPicker, Select, InputNumber, Popconfirm, Slider, Tabs, Checkbox } from 'antd';
 import {
   UploadOutlined, VideoCameraOutlined, AudioOutlined,
   PlusOutlined, ReloadOutlined, ExportOutlined, DeleteOutlined,
   PlusCircleOutlined, FontSizeOutlined, FolderOpenOutlined,
   ZoomInOutlined, ZoomOutOutlined, PlayCircleOutlined, PauseCircleOutlined,
-  StepBackwardOutlined, StepForwardOutlined, AudioMutedOutlined, CloseOutlined,
+  StepBackwardOutlined, StepForwardOutlined, AudioMutedOutlined, CloseOutlined, UndoOutlined,
 } from '@ant-design/icons';
 import { cliplite } from './api/client';
 import type { Asset, ProjectDetail, HealthStatus, Clip, Track, TextStyle, ActiveClipInfo } from './types';
@@ -17,6 +17,9 @@ export default function App() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+  // 素材库批量管理
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [uploadProgress, setUploadProgress] = useState(0);
   const [creating, setCreating] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -106,6 +109,13 @@ export default function App() {
   // 片段变速编辑
   const [speedTarget, setSpeedTarget] = useState<{ track: Track; index: number } | null>(null);
   const [speedValue, setSpeedValue] = useState(1);
+  // 片段截取（trim）编辑
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [editTab, setEditTab] = useState<'trim' | 'speed'>('trim');
+  // 边缘拖拽裁剪（trim handles）
+  const [trimPreview, setTrimPreview] = useState<{ trackId: number; index: number; sourceStart: number; sourceEnd: number; timelineStart: number; timelineEnd: number } | null>(null);
+  const trimDragRef = useRef<{ side: 'left' | 'right'; trackId: number; index: number; startX: number; initSourceStart: number; initSourceEnd: number; initTimelineStart: number; initTimelineEnd: number; full: number; speed: number; track: Track; lastStart: number; lastEnd: number } | null>(null);
   const [subText, setSubText] = useState('');
   const [subStart, setSubStart] = useState(0);
   const [subEnd, setSubEnd] = useState(3);
@@ -248,6 +258,27 @@ export default function App() {
     }
   };
 
+  // 批量管理：勾选/批量删除
+  const toggleSelectAsset = (id: number) => setSelectedIds(prev => {
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
+  const deleteSelectedAssets = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      await cliplite.batchDeleteAssets([...selectedIds]);
+      if (selectedAsset && selectedIds.has(selectedAsset.id)) setSelectedAsset(null);
+      setBatchMode(false);
+      setSelectedIds(new Set());
+      await refreshAssets();
+      if (project) setProject(await cliplite.getProject(project.project.id));
+      message.success('已删除选中素材');
+    } catch (e: any) {
+      message.error('删除失败: ' + (e?.message || ''));
+    }
+  };
+
   // 拖拽重排序（重新计算时间轴位置）
   const reorderClips = async (track: Track, fromIdx: number, toIdx: number) => {
     if (!project || fromIdx === toIdx) return;
@@ -286,6 +317,83 @@ export default function App() {
     await cliplite.saveClips(track.id, reordered);
     setProject(await cliplite.getProject(project.project.id));
     message.success(`已设为 ${spd}x`);
+  };
+
+  // 截取片段：收紧 source_start/source_end（裁掉左右、保留中间），整轨紧凑重排使后续片段顺延
+  const applyTrim = async (track: Track, clipIndex: number, newStart: number, newEnd: number) => {
+    if (!project) return;
+    const asset = assets.find(a => a.id === track.clips[clipIndex].asset_id);
+    const full = asset?.duration || newEnd;
+    const s = Math.max(0, Math.min(newStart, full));
+    const e = Math.max(s + 0.1, Math.min(newEnd, full));      // 出点 > 入点，最小 0.1s
+    let cursor = 0;
+    const reordered = track.clips.map((c, i) => {
+      let d = c.timeline_end - c.timeline_start;
+      let next: Clip = c;
+      if (i === clipIndex) {
+        d = (e - s) / (c.speed || 1);                          // 截取后时长（含变速）
+        next = { ...c, source_start: s, source_end: e };
+      }
+      const start = cursor;
+      cursor += d;
+      return { ...next, timeline_start: start, timeline_end: start + d };
+    });
+    await cliplite.saveClips(track.id, reordered);
+    setProject(await cliplite.getProject(project.project.id));
+    message.success('已截取');
+  };
+
+  // 当前编辑片段对应素材的总时长（截取滑块上限 & 还原整段用）
+  const editAssetDur = speedTarget ? (assets.find(a => a.id === speedTarget.track.clips[speedTarget.index]?.asset_id)?.duration || 10) : 10;
+
+  // 拖动片段左右边缘裁剪（剪映式）。参考 startResize/startTimelineResize：mousedown→document mousemove/mouseup。
+  const startTrimDrag = (e: React.MouseEvent, side: 'left' | 'right', clip: Clip, clipIndex: number, track: Track) => {
+    e.preventDefault();
+    e.stopPropagation();                        // 阻止 clip-block 的 HTML5 拖拽排序
+    const asset = assets.find(a => a.id === clip.asset_id);
+    const full = asset?.duration || (clip.source_end || 0);
+    const speed = clip.speed || 1;
+    const initSS = clip.source_start || 0;
+    const initSE = clip.source_end || full;
+    trimDragRef.current = {
+      side, trackId: track.id, index: clipIndex, startX: e.clientX,
+      initSourceStart: initSS, initSourceEnd: initSE,
+      initTimelineStart: clip.timeline_start, initTimelineEnd: clip.timeline_end,
+      full, speed, track, lastStart: initSS, lastEnd: initSE,
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent) => {
+      const d = trimDragRef.current;
+      if (!d) return;
+      const deltaSec = (ev.clientX - d.startX) / pxPerSec;          // timeline 域位移
+      const deltaSrc = deltaSec * d.speed;                           // source 域位移
+      if (d.side === 'left') {
+        const ns = Math.max(0, Math.min(d.initSourceStart + deltaSrc, d.initSourceEnd - 0.1));
+        const nts = d.initTimelineStart + (ns - d.initSourceStart) / d.speed;
+        d.lastStart = ns; d.lastEnd = d.initSourceEnd;
+        setTrimPreview({ trackId: d.trackId, index: d.index, sourceStart: ns, sourceEnd: d.initSourceEnd, timelineStart: nts, timelineEnd: d.initTimelineEnd });
+        setPlayhead(Math.min(Math.max(0, nts), d.initTimelineEnd - 0.001));   // 预览同步到入点帧
+      } else {
+        const ne = Math.max(d.initSourceStart + 0.1, Math.min(d.initSourceEnd + deltaSrc, d.full));
+        const nte = d.initTimelineEnd + (ne - d.initSourceEnd) / d.speed;
+        d.lastStart = d.initSourceStart; d.lastEnd = ne;
+        setTrimPreview({ trackId: d.trackId, index: d.index, sourceStart: d.initSourceStart, sourceEnd: ne, timelineStart: d.initTimelineStart, timelineEnd: nte });
+        setPlayhead(Math.max(0, nte - 0.001));                                // 预览同步到出点帧
+      }
+    };
+    const onUp = () => {
+      const d = trimDragRef.current;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      trimDragRef.current = null;
+      setTrimPreview(null);
+      if (d) applyTrim(d.track, d.index, d.lastStart, d.lastEnd);   // 复用：紧凑重排 + 保存
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
   // 添加字幕
@@ -334,8 +442,16 @@ export default function App() {
         if (st.status === 'done') {
           if (renderPollRef.current) window.clearInterval(renderPollRef.current);
           setRendering(false);
-          setRenderUrl(cliplite.renderDownloadUrl(pid));
+          const url = cliplite.renderDownloadUrl(pid);
+          setRenderUrl(url);
           message.success('渲染完成！');
+          // 渲染完成自动触发浏览器下载（后端返回 Content-Disposition: attachment，会直接下载）
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `cliplite_${pid}.mp4`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
         } else if (st.status === 'failed') {
           if (renderPollRef.current) window.clearInterval(renderPollRef.current);
           setRendering(false);
@@ -430,8 +546,31 @@ export default function App() {
     if (!lane) return;
     const rect = lane.getBoundingClientRect();
     const t = Math.max(0, (e.clientX - rect.left) / pxPerSec);
+    stopPlayback();
     setPlayhead(Math.min(t, totalDuration()));
     setPreviewMode('timeline');
+  };
+
+  // 按住时间轴拖动播放头：mousedown 立即定位 + mousemove 持续更新，预览实时跟随
+  const startSeekDrag = (e: React.MouseEvent) => {
+    if (!project) return;
+    e.preventDefault();
+    stopPlayback();
+    setPreviewMode('timeline');
+    const lane = timelineLaneRef.current;
+    if (!lane) return;
+    const seek = (clientX: number) => {
+      const rect = lane.getBoundingClientRect();
+      setPlayhead(Math.max(0, Math.min((clientX - rect.left) / pxPerSec, totalDuration())));
+    };
+    seek(e.clientX);
+    const onMove = (ev: MouseEvent) => seek(ev.clientX);
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
   // 停止播放
@@ -557,32 +696,55 @@ export default function App() {
 
       <div className="app-body">
         <div className="sidebar" style={{ width: sidebarWidth, flexShrink: 0 }}>
-          <div style={{ marginBottom: 12, fontWeight: 600, color: '#a1a1aa' }}>素材库 ({assets.length})</div>
+          <div style={{ marginBottom: 12, fontWeight: 600, color: '#a1a1aa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{batchMode ? `已选 ${selectedIds.size}/${assets.length}` : `素材库 (${assets.length})`}</span>
+            {batchMode ? (
+              <span>
+                <Button size="small" type="link" onClick={() => setSelectedIds(new Set(assets.map(a => a.id)))}>全选</Button>
+                <Button size="small" type="link" onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }}>退出</Button>
+              </span>
+            ) : assets.length > 0 && (
+              <Button size="small" type="link" onClick={() => { setBatchMode(true); setSelectedIds(new Set()); }}>批量管理</Button>
+            )}
+          </div>
+          {batchMode && selectedIds.size > 0 && (
+            <Popconfirm title={`删除选中的 ${selectedIds.size} 个素材？`} description="将同时删除素材文件和时间轴中引用它们的片段" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={deleteSelectedAssets}>
+              <Button size="small" danger type="primary" block icon={<DeleteOutlined />} style={{ marginBottom: 8 }}>删除选中 ({selectedIds.size})</Button>
+            </Popconfirm>
+          )}
           {assets.length === 0 && (
             <div style={{ color: '#71717a', fontSize: 12, padding: 16, textAlign: 'center' }}>点击右上角"导入素材"上传视频/音频</div>
           )}
           {assets.map(a => (
-            <div key={a.id} className="asset-item" onClick={() => { setSelectedAsset(a); setPreviewMode('asset'); }} style={selectedAsset?.id === a.id ? { background: '#52525b' } : {}}>
+            <div key={a.id} className="asset-item" onClick={() => {
+              if (batchMode) toggleSelectAsset(a.id);
+              else { setSelectedAsset(a); setPreviewMode('asset'); }
+            }} style={(batchMode ? selectedIds.has(a.id) : selectedAsset?.id === a.id) ? { background: '#52525b' } : {}}>
+              {batchMode && <Checkbox checked={selectedIds.has(a.id)} onClick={e => e.stopPropagation()} style={{ marginRight: 8 }} />}
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.filename}>
                   {a.type === 'video' ? <VideoCameraOutlined /> : <AudioOutlined />} {a.filename}
                 </div>
                 <div style={{ color: '#71717a', fontSize: 10 }}>{fmtDuration(a.duration)} · {a.width > 0 ? `${a.width}x${a.height}` : 'audio'}</div>
               </div>
-              <Tooltip title="加到时间轴">
-                <PlusCircleOutlined onClick={(e) => { e.stopPropagation(); addAssetToTimeline(a); }} style={{ color: '#22d3ee', fontSize: 16, marginLeft: 8 }} />
-              </Tooltip>
-              <Popconfirm
-                title="删除该素材？"
-                description="将同时删除素材文件和时间轴中引用它的片段"
-                okText="删除"
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-                onConfirm={(e) => { e?.stopPropagation(); deleteAsset(a); }}
-                onCancel={(e) => e?.stopPropagation()}
-              >
-                <DeleteOutlined onClick={(e) => e.stopPropagation()} style={{ color: '#71717a', fontSize: 14, marginLeft: 6 }} />
-              </Popconfirm>
+              {!batchMode && (
+                <>
+                  <Tooltip title="加到时间轴">
+                    <PlusCircleOutlined onClick={(e) => { e.stopPropagation(); addAssetToTimeline(a); }} style={{ color: '#22d3ee', fontSize: 16, marginLeft: 8 }} />
+                  </Tooltip>
+                  <Popconfirm
+                    title="删除该素材？"
+                    description="将同时删除素材文件和时间轴中引用它的片段"
+                    okText="删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={(e) => { e?.stopPropagation(); deleteAsset(a); }}
+                    onCancel={(e) => e?.stopPropagation()}
+                  >
+                    <DeleteOutlined onClick={(e) => e.stopPropagation()} style={{ color: '#71717a', fontSize: 14, marginLeft: 6 }} />
+                  </Popconfirm>
+                </>
+              )}
             </div>
           ))}
           {selectedAsset && selectedAsset.type === 'video' && (
@@ -622,7 +784,7 @@ export default function App() {
                   <a href={renderUrl} download><Button type="primary" icon={<ExportOutlined />}>下载视频</Button></a>
                 </div>
               </div>
-            ) : previewMode === 'timeline' && project && totalDuration() > 0 ? (
+            ) : (previewMode === 'timeline' || !selectedAsset) && project && totalDuration() > 0 ? (
               // 时间轴驱动预览：显示播放头对应的视频帧
               <div className="preview-stage">
                 {/* 模式切换提示 */}
@@ -743,7 +905,7 @@ export default function App() {
                   className="track-lane"
                   ref={track.type === 'video' ? timelineLaneRef : undefined}
                   style={{ width: timelineWidth, cursor: project ? 'pointer' : 'default' }}
-                  onClick={project ? seekToMouse : undefined}
+                  onMouseDown={project ? startSeekDrag : undefined}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => { setDragOverIndex(null); }}
                 >
@@ -754,18 +916,27 @@ export default function App() {
                   {track.clips && track.clips.length > 0 ? (
                     track.clips.map((clip: Clip, i: number) => {
                       const st = parseStyle(clip);
+                      const pv = trimPreview && trimPreview.trackId === track.id && trimPreview.index === i ? trimPreview : null;
+                      const tlStart = pv?.timelineStart ?? clip.timeline_start;
+                      const tlEnd = pv?.timelineEnd ?? clip.timeline_end;
                       return (
-                      <Tooltip key={i} title={<div><div>{clip.text || '片段'}</div><div>{fmtDuration(clip.timeline_start)} → {fmtDuration(clip.timeline_end)}</div>{(track.type === 'video' || track.type === 'audio') && <div>速度: {clip.speed || 1}x（点击片段修改）</div>}{track.type === 'subtitle' && st.font && <div>字体:{st.font} {st.size}px</div>}</div>}>
+                      <Tooltip key={i} title={<div><div>{clip.text || '片段'}</div><div>{fmtDuration(clip.timeline_start)} → {fmtDuration(clip.timeline_end)}</div>{(track.type === 'video' || track.type === 'audio') && <div>速度: {clip.speed || 1}x · 截取: {(clip.source_start || 0).toFixed(1)}–{(clip.source_end || 0).toFixed(1)}s（双击编辑）</div>}{track.type === 'subtitle' && st.font && <div>字体:{st.font} {st.size}px</div>}</div>}>
                         <div
                           className={`clip-block ${track.type}${dragOverIndex === i ? ' drag-over' : ''}`}
                           draggable
-                          onClick={(e) => {
-                            if (track.type === 'subtitle') return;   // 字幕不变速
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); seekToMouse(e); }}
+                          onDoubleClick={(e) => {
+                            if (track.type === 'subtitle') return;   // 字幕不编辑
                             e.stopPropagation();
+                            const asset = assets.find(a => a.id === clip.asset_id);
                             setSpeedTarget({ track, index: i });
                             setSpeedValue(clip.speed || 1);
+                            setTrimStart(clip.source_start || 0);
+                            setTrimEnd(clip.source_end || asset?.duration || 0);
+                            setEditTab('trim');
                           }}
-                          onDragStart={() => setDragInfo({ trackId: track.id, index: i })}
+                          onDragStart={(e) => { if (trimDragRef.current) { e.preventDefault(); return; } setDragInfo({ trackId: track.id, index: i }); }}
                           onDragOver={(e) => { e.preventDefault(); if (dragInfo?.trackId === track.id) setDragOverIndex(i); }}
                           onDrop={(e) => {
                             e.stopPropagation();
@@ -776,15 +947,24 @@ export default function App() {
                           }}
                           onDragEnd={() => { setDragInfo(null); setDragOverIndex(null); }}
                           style={{
-                            left: `${clip.timeline_start * pxPerSec}px`,
-                            width: `${Math.max(40, (clip.timeline_end - clip.timeline_start) * pxPerSec)}px`,
+                            left: `${tlStart * pxPerSec}px`,
+                            width: `${Math.max(40, (tlEnd - tlStart) * pxPerSec)}px`,
                           }}
                         >
+                          {track.type !== 'subtitle' && (
+                            <div className="trim-handle trim-handle-left" onMouseDown={(e) => startTrimDrag(e, 'left', clip, i, track)} />
+                          )}
                           <span className="clip-text">{clip.text || (track.type === 'subtitle' ? '字幕' : '片段')}</span>
                           {track.type === 'subtitle' && st.color && (
                             <span className="clip-swatch" style={{ background: st.color, border: `1px solid ${st.strokeColor || '#000'}` }} />
                           )}
+                          {pv && (
+                            <span className="trim-readout">{pv.sourceStart.toFixed(1)}–{pv.sourceEnd.toFixed(1)}s</span>
+                          )}
                           <DeleteOutlined className="clip-del" onClick={(e) => { e.stopPropagation(); removeClip(track, i); }} />
+                          {track.type !== 'subtitle' && (
+                            <div className="trim-handle trim-handle-right" onMouseDown={(e) => startTrimDrag(e, 'right', clip, i, track)} />
+                          )}
                         </div>
                       </Tooltip>
                       );
@@ -863,16 +1043,50 @@ export default function App() {
         </div>
       </Modal>
 
-      {/* 片段变速 */}
-      <Modal title="片段变速" open={!!speedTarget} onOk={() => { if (speedTarget) changeSpeed(speedTarget.track, speedTarget.index, speedValue); setSpeedTarget(null); }} onCancel={() => setSpeedTarget(null)} okText="应用" cancelText="取消">
-        <div style={{ marginBottom: 8, color: '#a1a1aa', fontSize: 12 }}>速度（0.25–4）：{'<1 慢放拉长，>1 加速'}</div>
-        <Segmented value={speedValue} onChange={v => setSpeedValue(v as number)} block
-          options={[0.5, 0.75, 1, 1.25, 1.5, 2].map(s => ({ label: `${s}x`, value: s }))} />
-        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: '#a1a1aa', fontSize: 12 }}>自定义</span>
-          <InputNumber min={0.25} max={4} step={0.25} value={speedValue} onChange={v => { if (v) setSpeedValue(v); }} style={{ width: 120 }} />
-          <span style={{ color: '#71717a', fontSize: 12 }}>x</span>
-        </div>
+      {/* 片段编辑（截取 + 变速） */}
+      <Modal title="片段编辑" open={!!speedTarget} width={520}
+        onOk={() => {
+          if (speedTarget) {
+            if (editTab === 'trim') applyTrim(speedTarget.track, speedTarget.index, trimStart, trimEnd);
+            else changeSpeed(speedTarget.track, speedTarget.index, speedValue);
+          }
+          setSpeedTarget(null);
+        }}
+        onCancel={() => setSpeedTarget(null)} okText="应用" cancelText="取消">
+        <Tabs activeKey={editTab} onChange={v => setEditTab(v as 'trim' | 'speed')} items={[
+          {
+            key: 'trim', label: '截取',
+            children: (
+              <div>
+                <div style={{ marginBottom: 8, color: '#a1a1aa', fontSize: 12 }}>拖动两端滑块裁掉左右，保留中间段</div>
+                <Slider range min={0} max={editAssetDur} step={0.1} value={[trimStart, trimEnd]}
+                  onChange={v => { setTrimStart(v[0]); setTrimEnd(v[1]); }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#a1a1aa', fontSize: 12, margin: '4px 0 16px' }}>
+                  <span>入点 {trimStart.toFixed(1)}s · 出点 {trimEnd.toFixed(1)}s</span>
+                  <span>截取后 {((trimEnd - trimStart) / (speedValue || 1)).toFixed(1)}s</span>
+                </div>
+                <Button block icon={<UndoOutlined />} style={{ marginTop: 8, color: '#0891b2', borderColor: '#67e8f9' }} onClick={() => {
+                  if (speedTarget) { applyTrim(speedTarget.track, speedTarget.index, 0, editAssetDur); setSpeedTarget(null); }
+                }}>还原整段</Button>
+              </div>
+            ),
+          },
+          {
+            key: 'speed', label: '变速',
+            children: (
+              <div>
+                <div style={{ marginBottom: 8, color: '#a1a1aa', fontSize: 12 }}>速度（0.25–4）：{'<1 慢放拉长，>1 加速'}</div>
+                <Segmented value={speedValue} onChange={v => setSpeedValue(v as number)} block
+                  options={[0.5, 0.75, 1, 1.25, 1.5, 2].map(s => ({ label: `${s}x`, value: s }))} />
+                <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#a1a1aa', fontSize: 12 }}>自定义</span>
+                  <InputNumber min={0.25} max={4} step={0.25} value={speedValue} onChange={v => { if (v) setSpeedValue(v); }} style={{ width: 120 }} />
+                  <span style={{ color: '#71717a', fontSize: 12 }}>x</span>
+                </div>
+              </div>
+            ),
+          },
+        ]} />
       </Modal>
 
       {/* 打开工程 */}

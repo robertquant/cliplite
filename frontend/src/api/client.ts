@@ -22,6 +22,7 @@ export const cliplite = {
   },
   getAsset: (id: number) => api.get<Asset>(`/assets/${id}`).then(r => r.data),
   deleteAsset: (id: number) => api.delete(`/assets/${id}`),
+  batchDeleteAssets: (ids: number[]) => api.post('/assets/batch-delete', { ids }),
   assetFileUrl: (id: number) => `/api/assets/${id}/file`,
   extractAudio: (id: number, format: 'mp3' | 'wav' | 'aac' = 'mp3') =>
     api.post<{ asset_id: number; format: string; path: string }>(
