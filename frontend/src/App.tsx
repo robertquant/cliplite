@@ -26,6 +26,8 @@ export default function App() {
 
   // 素材库侧边栏宽度（可拖拽调整）
   const [sidebarWidth, setSidebarWidth] = useState(280);
+  // 时间轴高度（预览↔时间轴可上下拖动调整）
+  const [timelineHeight, setTimelineHeight] = useState(240);
   const draggingRef = useRef(false);
 
   // 预览模式：'asset'(单素材) | 'timeline'(时间轴成片)
@@ -56,12 +58,42 @@ export default function App() {
     window.addEventListener('mouseup', onUp);
   };
 
+  // 预览区↔时间轴 上下拖动分隔条
+  const startTimelineResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    const startY = e.clientY;
+    const startH = timelineHeight;
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return;
+      // 向上拖(clientY 减小) → 时间轴变高；限制 120px ~ 留出预览最小高度
+      const h = startH + (startY - ev.clientY);
+      const maxH = window.innerHeight - 240;
+      setTimelineHeight(Math.min(maxH, Math.max(120, h)));
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   // 时间轴播放头 + 播放
   const [playhead, setPlayhead] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);     // 背景音乐预览（与视频同步播放 → 预览混音）
   const rafRef = useRef<number | null>(null);
   const timelineLaneRef = useRef<HTMLDivElement | null>(null);
+  const musicClipRef = useRef<ActiveClipInfo | null>(null);   // 音频元素当前绑定的音乐片段（用于检测素材切换）
+  // 预览背景音乐音量，与导出 MixAudio(audioVolume=0.6) 对齐
+  const MUSIC_VOLUME = 0.6;
 
   // 渲染
   const [rendering, setRendering] = useState(false);
@@ -71,6 +103,9 @@ export default function App() {
 
   // 字幕编辑（含样式）
   const [subtitleModal, setSubtitleModal] = useState(false);
+  // 片段变速编辑
+  const [speedTarget, setSpeedTarget] = useState<{ track: Track; index: number } | null>(null);
+  const [speedValue, setSpeedValue] = useState(1);
   const [subText, setSubText] = useState('');
   const [subStart, setSubStart] = useState(0);
   const [subEnd, setSubEnd] = useState(3);
@@ -185,6 +220,7 @@ export default function App() {
       track_id: track.id, asset_id: asset.id,
       timeline_start: lastEnd, timeline_end: lastEnd + (asset.duration || 5),
       source_start: 0, source_end: asset.duration || 5,
+      speed: 1,
     };
     await cliplite.saveClips(track.id, [...track.clips, newClip]);
     setProject(await cliplite.getProject(project.project.id));
@@ -229,6 +265,27 @@ export default function App() {
     await cliplite.saveClips(track.id, reordered);
     setProject(await cliplite.getProject(project.project.id));
     message.success('已重新排序');
+  };
+
+  // 改片段变速：重算该片段 timeline_end（源时长 / speed），整轨紧凑重排使后续片段顺延
+  const changeSpeed = async (track: Track, clipIndex: number, newSpeed: number) => {
+    if (!project) return;
+    const spd = Math.min(4, Math.max(0.25, newSpeed));
+    let cursor = 0;
+    const reordered = track.clips.map((c, i) => {
+      let dur = c.timeline_end - c.timeline_start;            // 默认保持原时长
+      const speed = i === clipIndex ? spd : (c.speed || 1);
+      if (i === clipIndex) {
+        const srcDur = (c.source_end || 0) - (c.source_start || 0);
+        dur = srcDur / spd;                                   // 变速后新时长
+      }
+      const start = cursor;
+      cursor += dur;
+      return { ...c, speed, timeline_start: start, timeline_end: cursor };
+    });
+    await cliplite.saveClips(track.id, reordered);
+    setProject(await cliplite.getProject(project.project.id));
+    message.success(`已设为 ${spd}x`);
   };
 
   // 添加字幕
@@ -322,17 +379,44 @@ export default function App() {
       if (time >= clip.timeline_start && time < clip.timeline_end) {
         const asset = assets.find(a => a.id === clip.asset_id);
         if (!asset) continue;
-        const offset = (clip.source_start || 0) + (time - clip.timeline_start);
+        const offset = (clip.source_start || 0) + (time - clip.timeline_start) * (clip.speed || 1);
         return { clip, asset, offsetInClip: Math.max(0, offset), mediaType: trackType };
       }
     }
     return null;
   }, [project, assets]);
 
+  // 用 ref 在 rAF 闭包里拿最新的查找函数（避免播放期间 project/assets 变化导致闭包过期）
+  const findClipInTrackRef = useRef(findClipInTrack);
+  findClipInTrackRef.current = findClipInTrack;
+
   // 找覆盖某时间点的片段：优先视频，无视频则音频
   const findMediaClipAt = useCallback((time: number): ActiveClipInfo | null => {
     return findClipInTrack(time, 'video') || findClipInTrack(time, 'audio');
   }, [findClipInTrack]);
+
+  // 同步背景音乐预览：在时间轴 tl(秒)处定位音乐轨片段并播放/暂停，与视频原声叠加形成混音。
+  // 音乐片段的切换与视频片段独立——背景音乐通常覆盖多个视频片段，视频切换时音乐不中断。
+  const syncPreviewMusic = useCallback((tl: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    const m = findClipInTrackRef.current(tl, 'audio');
+    if (!m) {                                   // 当前位置无音乐片段
+      if (!a.paused) a.pause();
+      musicClipRef.current = null;
+      return;
+    }
+    if (musicClipRef.current?.asset.id !== m.asset.id) {  // 切到另一个音乐素材
+      a.src = cliplite.assetFileUrl(m.asset.id);
+      musicClipRef.current = m;
+    }
+    a.volume = MUSIC_VOLUME;
+    const want = m.offsetInClip;
+    if (Math.abs(a.currentTime - want) > 0.25) {          // 偏差过大才 seek，避免频繁跳变
+      try { a.currentTime = want; } catch {}
+    }
+    if (a.paused) a.play().catch(() => {});
+  }, []);
 
   // 当前激活片段（驱动预览）
   const activeClip = findMediaClipAt(playhead);
@@ -357,6 +441,8 @@ export default function App() {
     rafRef.current = null;
     const v = videoRef.current;
     if (v) v.pause();
+    const a = audioRef.current;        // 同时暂停背景音乐
+    if (a) a.pause();
   }, []);
 
   // 播放循环：根据视频 currentTime 同步播放头，跨片段自动切换
@@ -368,8 +454,10 @@ export default function App() {
       const dur = totalDuration();
       if (!v || !info) { rafRef.current = requestAnimationFrame(tick); return; }
       // 用视频 currentTime 反推时间轴位置
-      const tl = info.clip.timeline_start + (v.currentTime - (info.clip.source_start || 0));
+      const tl = info.clip.timeline_start + (v.currentTime - (info.clip.source_start || 0)) / (info.clip.speed || 1);
       if (!isNaN(tl)) setPlayhead(tl);
+      // 同步背景音乐（与视频原声叠加 → 预览混音）
+      if (!isNaN(tl)) syncPreviewMusic(tl);
       // 片段播完：推进到下一片段（触发 activeClip 切换 → video remount → onCanPlay 续播）
       const clipEnd = info.clip.source_end || (info.clip.source_start || 0) + (info.clip.timeline_end - info.clip.timeline_start);
       if (v.currentTime >= clipEnd - 0.05 || tl >= dur) {
@@ -414,16 +502,33 @@ export default function App() {
     if (Math.abs(v.currentTime - off) > 0.1) {
       try { v.currentTime = off; } catch {}
     }
+    v.playbackRate = activeClipRef.current.clip.speed || 1;   // 变速片段按速度播放
     if (isPlaying) v.play().catch(() => {});
   };
 
-  // 暂停时：把视频 seek 到播放头对应的帧（所见即所得）
+  // 暂停时：把视频 seek 到播放头对应的帧（所见即所得）；同时把背景音乐定位到对应位置（不播放）
   useEffect(() => {
     if (isPlaying) return;
     const v = videoRef.current;
     if (!v || !activeClip) return;
     if (Math.abs(v.currentTime - activeClip.offsetInClip) > 0.1) {
       try { v.currentTime = activeClip.offsetInClip; } catch {}
+    }
+    // 拖动播放头时让背景音乐跟随定位，恢复播放时即从正确位置开始
+    const a = audioRef.current;
+    if (a) {
+      const m = findClipInTrack(playhead, 'audio');
+      if (m) {
+        if (musicClipRef.current?.asset.id !== m.asset.id) {
+          a.src = cliplite.assetFileUrl(m.asset.id);
+        }
+        musicClipRef.current = m;
+        a.volume = MUSIC_VOLUME;
+        try { a.currentTime = m.offsetInClip; } catch {}
+      } else {
+        if (!a.paused) a.pause();
+        musicClipRef.current = null;
+      }
     }
   }, [playhead, activeClip, isPlaying]);
 
@@ -507,6 +612,8 @@ export default function App() {
 
         <div className="main-content">
           <div className="preview-area">
+            {/* 背景音乐预览元素：与时间轴视频同步播放实现预览混音。常驻渲染，不随片段切换重建 */}
+            <audio ref={audioRef} preload="auto" style={{ display: 'none' }} />
             {renderUrl ? (
               <div style={{ textAlign: 'center' }}>
                 <div style={{ color: '#22d3ee', marginBottom: 12, fontSize: 14 }}>✅ 渲染产物预览</div>
@@ -517,7 +624,7 @@ export default function App() {
               </div>
             ) : previewMode === 'timeline' && project && totalDuration() > 0 ? (
               // 时间轴驱动预览：显示播放头对应的视频帧
-              <div style={{ textAlign: 'center', width: '100%' }}>
+              <div className="preview-stage">
                 {/* 模式切换提示 */}
                 <div className="preview-mode-hint">
                   <span>⏱ 时间轴预览</span>
@@ -552,7 +659,7 @@ export default function App() {
                       onLoadedData={onVideoReady}
                       onPause={() => setIsPlaying(false)}
                       onEnded={() => stopPlayback()}
-                      style={{ maxWidth: '100%', maxHeight: '56vh' }}
+                      style={{ maxWidth: '100%' }}
                     />
                   )
                 ) : (
@@ -574,7 +681,7 @@ export default function App() {
             ) : !selectedAsset ? (
               <div className="empty-hint"><VideoCameraOutlined style={{ fontSize: 48, marginBottom: 16 }} /><div>从左侧选择素材预览，或添加片段到时间轴</div></div>
             ) : (
-              <div style={{ textAlign: 'center', width: '100%' }}>
+              <div className="preview-stage">
                 {/* 素材预览模式 + 可切换到时间轴 */}
                 {project && totalDuration() > 0 && (
                   <div className="preview-mode-hint">
@@ -585,7 +692,7 @@ export default function App() {
                   </div>
                 )}
                 {selectedAsset.type === 'video' ? (
-                  <video key={selectedAsset.id} src={cliplite.assetFileUrl(selectedAsset.id)} controls autoPlay style={{ maxWidth: '100%', maxHeight: '60vh' }} />
+                  <video key={selectedAsset.id} src={cliplite.assetFileUrl(selectedAsset.id)} controls autoPlay style={{ maxWidth: '100%' }} />
                 ) : (
                   <div>
                     <AudioOutlined style={{ fontSize: 64, color: '#06b6d4' }} />
@@ -597,7 +704,8 @@ export default function App() {
             )}
           </div>
 
-          <div className="timeline-area">
+          <div className="timeline-resizer" onMouseDown={startTimelineResize} title="拖动调整时间轴高度" />
+          <div className="timeline-area" style={{ height: timelineHeight, flexShrink: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <span style={{ color: '#a1a1aa', fontSize: 12 }}>
                 {project ? `工程: ${project.project.name} · 时长 ${fmtDuration(totalDuration())}` : '未打开工程'}
@@ -647,10 +755,16 @@ export default function App() {
                     track.clips.map((clip: Clip, i: number) => {
                       const st = parseStyle(clip);
                       return (
-                      <Tooltip key={i} title={<div><div>{clip.text || '片段'}</div><div>{fmtDuration(clip.timeline_start)} → {fmtDuration(clip.timeline_end)}</div>{track.type === 'subtitle' && st.font && <div>字体:{st.font} {st.size}px</div>}</div>}>
+                      <Tooltip key={i} title={<div><div>{clip.text || '片段'}</div><div>{fmtDuration(clip.timeline_start)} → {fmtDuration(clip.timeline_end)}</div>{(track.type === 'video' || track.type === 'audio') && <div>速度: {clip.speed || 1}x（点击片段修改）</div>}{track.type === 'subtitle' && st.font && <div>字体:{st.font} {st.size}px</div>}</div>}>
                         <div
                           className={`clip-block ${track.type}${dragOverIndex === i ? ' drag-over' : ''}`}
                           draggable
+                          onClick={(e) => {
+                            if (track.type === 'subtitle') return;   // 字幕不变速
+                            e.stopPropagation();
+                            setSpeedTarget({ track, index: i });
+                            setSpeedValue(clip.speed || 1);
+                          }}
                           onDragStart={() => setDragInfo({ trackId: track.id, index: i })}
                           onDragOver={(e) => { e.preventDefault(); if (dragInfo?.trackId === track.id) setDragOverIndex(i); }}
                           onDrop={(e) => {
@@ -746,6 +860,18 @@ export default function App() {
               {subText || '字幕预览效果'}
             </span>
           </div>
+        </div>
+      </Modal>
+
+      {/* 片段变速 */}
+      <Modal title="片段变速" open={!!speedTarget} onOk={() => { if (speedTarget) changeSpeed(speedTarget.track, speedTarget.index, speedValue); setSpeedTarget(null); }} onCancel={() => setSpeedTarget(null)} okText="应用" cancelText="取消">
+        <div style={{ marginBottom: 8, color: '#a1a1aa', fontSize: 12 }}>速度（0.25–4）：{'<1 慢放拉长，>1 加速'}</div>
+        <Segmented value={speedValue} onChange={v => setSpeedValue(v as number)} block
+          options={[0.5, 0.75, 1, 1.25, 1.5, 2].map(s => ({ label: `${s}x`, value: s }))} />
+        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: '#a1a1aa', fontSize: 12 }}>自定义</span>
+          <InputNumber min={0.25} max={4} step={0.25} value={speedValue} onChange={v => { if (v) setSpeedValue(v); }} style={{ width: 120 }} />
+          <span style={{ color: '#71717a', fontSize: 12 }}>x</span>
         </div>
       </Modal>
 

@@ -44,6 +44,7 @@ export interface Clip {
   style_json?: string;
   fade_in?: number;
   fade_out?: number;
+  speed?: number;          // 变速倍率，默认 1.0（<1 慢放拉长，>1 加速）
 }
 
 export interface Track {
