@@ -232,16 +232,16 @@ func uniqueFilename(db *sql.DB, base string) string {
 	}
 }
 
-// ServeAssetFile GET /api/assets/:id/file — 直接返回原文件（预览用）
+// ServeAssetFile GET /api/assets/:id/file — 内联返回原文件（供 video/audio 预览）
 func (h *Handlers) ServeAssetFile(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	var path, filename string
-	err := h.DB.QueryRow(`SELECT storage_path, filename FROM assets WHERE id=?`, id).Scan(&path, &filename)
+	var path string
+	err := h.DB.QueryRow(`SELECT storage_path FROM assets WHERE id=?`, id).Scan(&path)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "素材不存在"})
 		return
 	}
-	c.FileAttachment(path, filename)
+	c.File(path) // 内联(inline)：video/audio 元素才能流式预览；FileAttachment 的 attachment 头会被当下载，导致切换素材时预览不刷新
 }
 
 // ExtractAudio POST /api/assets/:id/extract-audio?format=mp3
