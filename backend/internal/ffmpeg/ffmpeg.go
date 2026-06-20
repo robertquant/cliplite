@@ -141,13 +141,22 @@ func (f *FFmpeg) Concat(listFile, output string, reencode bool) error {
 	return nil
 }
 
-// MixAudio 将背景音乐混入视频。audioVolume 背景音乐音量(0.0-2.0)，keepOriginal 是否保留原视频声音
+// MixAudio 将背景音乐混入视频。audioVolume 背景音乐音量(0.0-2.0)，keepOriginal 是否保留原视频声音。
+// 若视频本身没有音频轨（如「去除声音」生成的素材），自动降级为替换模式（仅用背景音乐）。
 func (f *FFmpeg) MixAudio(video, audio, output string, audioVolume float64, keepOriginal bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), f.Timeout)
 	defer cancel()
 	vol := fmt.Sprintf("%.2f", audioVolume)
+
+	// 探测视频是否有音频轨
+	videoHasAudio := false
+	if p, err := f.ProbeMedia(video); err == nil {
+		videoHasAudio = p.HasAudio
+	}
+
+	mixMode := keepOriginal && videoHasAudio
 	var args []string
-	if keepOriginal {
+	if mixMode {
 		// 原音 + 背景音乐混合
 		args = []string{
 			"-i", video, "-i", audio,
@@ -156,7 +165,7 @@ func (f *FFmpeg) MixAudio(video, audio, output string, audioVolume float64, keep
 			"-c:v", "copy", "-c:a", "aac",
 		}
 	} else {
-		// 替换为背景音乐
+		// 替换为背景音乐（视频无音轨时也走这条）
 		args = []string{
 			"-i", video, "-i", audio,
 			"-filter_complex", "[1:a]volume=" + vol + "[aout]",
