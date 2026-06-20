@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -170,6 +171,67 @@ func (h *Handlers) DeleteAsset(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "id": id})
 }
 
+// DeleteAssets POST /api/assets/batch-delete {ids:[]} — 批量删除素材（DB + 文件 + 关联片段）
+func (h *Handlers) DeleteAssets(c *gin.Context) {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if len(body.IDs) == 0 {
+		c.JSON(200, gin.H{"ok": true, "count": 0})
+		return
+	}
+	ph := make([]string, len(body.IDs))
+	args := make([]any, len(body.IDs))
+	for i, id := range body.IDs {
+		ph[i] = "?"
+		args[i] = id
+	}
+	in := strings.Join(ph, ",")
+	// 收集文件路径
+	rows, err := h.DB.Query(`SELECT storage_path FROM assets WHERE id IN (`+in+`)`, args...)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err == nil && p != "" {
+			paths = append(paths, p)
+		}
+	}
+	rows.Close()
+	// 删关联片段 + DB 记录
+	h.DB.Exec(`DELETE FROM clips WHERE asset_id IN (`+in+`)`, args...)
+	h.DB.Exec(`DELETE FROM assets WHERE id IN (`+in+`)`, args...)
+	// 删磁盘文件（忽略错误，文件可能已被删）
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
+	c.JSON(200, gin.H{"ok": true, "count": len(body.IDs)})
+}
+
+// uniqueFilename 在 assets 表里找不重名的文件名：base 不重就用，否则追加 _2/_3...
+func uniqueFilename(db *sql.DB, base string) string {
+	name := base
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for i := 2; ; i++ {
+		var cnt int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM assets WHERE filename=?`, name).Scan(&cnt); err != nil {
+			return name
+		}
+		if cnt == 0 {
+			return name
+		}
+		name = fmt.Sprintf("%s_%d%s", stem, i, ext)
+	}
+}
+
 // ServeAssetFile GET /api/assets/:id/file — 直接返回原文件（预览用）
 func (h *Handlers) ServeAssetFile(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -185,8 +247,8 @@ func (h *Handlers) ServeAssetFile(c *gin.Context) {
 // ExtractAudio POST /api/assets/:id/extract-audio?format=mp3
 func (h *Handlers) ExtractAudio(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	var srcPath string
-	if err := h.DB.QueryRow(`SELECT storage_path FROM assets WHERE id=?`, id).Scan(&srcPath); err != nil {
+	var srcPath, srcName string
+	if err := h.DB.QueryRow(`SELECT storage_path, filename FROM assets WHERE id=?`, id).Scan(&srcPath, &srcName); err != nil {
 		c.JSON(404, gin.H{"error": "素材不存在"})
 		return
 	}
@@ -210,7 +272,7 @@ func (h *Handlers) ExtractAudio(c *gin.Context) {
 	// 记录为新素材
 	res, _ := h.DB.Exec(
 		`INSERT INTO assets (type, filename, storage_path, duration, size_bytes) VALUES ('audio', ?, ?, ?, ?)`,
-		"extracted_"+filepath.Base(outPath), outPath, duration, fileSize(outPath),
+		uniqueFilename(h.DB, strings.TrimSuffix(srcName, filepath.Ext(srcName))+"_音频."+format), outPath, duration, fileSize(outPath),
 	)
 	newID, _ := res.LastInsertId()
 
@@ -225,8 +287,8 @@ func (h *Handlers) ExtractAudio(c *gin.Context) {
 // RemoveAudioTrack POST /api/assets/:id/remove-audio — 去除视频声音，只保留画面
 func (h *Handlers) RemoveAudioTrack(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	var srcPath string
-	if err := h.DB.QueryRow(`SELECT storage_path FROM assets WHERE id=?`, id).Scan(&srcPath); err != nil {
+	var srcPath, srcName string
+	if err := h.DB.QueryRow(`SELECT storage_path, filename FROM assets WHERE id=?`, id).Scan(&srcPath, &srcName); err != nil {
 		c.JSON(404, gin.H{"error": "素材不存在"})
 		return
 	}
@@ -247,7 +309,7 @@ func (h *Handlers) RemoveAudioTrack(c *gin.Context) {
 
 	res, _ := h.DB.Exec(
 		`INSERT INTO assets (type, filename, storage_path, duration, width, height, codec, size_bytes) VALUES ('video', ?, ?, ?, ?, ?, ?, ?)`,
-		"muted_"+filepath.Base(outPath), outPath, duration, w, ht, codec, fileSize(outPath),
+		uniqueFilename(h.DB, strings.TrimSuffix(srcName, filepath.Ext(srcName))+"_静音.mp4"), outPath, duration, w, ht, codec, fileSize(outPath),
 	)
 	newID, _ := res.LastInsertId()
 

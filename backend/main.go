@@ -62,6 +62,7 @@ func main() {
 		api.GET("/assets/:id", h.GetAsset)
 		api.PATCH("/assets/:id", h.RenameAsset)
 		api.DELETE("/assets/:id", h.DeleteAsset)
+		api.POST("/assets/batch-delete", h.DeleteAssets)
 		api.GET("/assets/:id/file", h.ServeAssetFile)
 		api.POST("/assets/:id/extract-audio", h.ExtractAudio)
 		api.POST("/assets/:id/remove-audio", h.RemoveAudioTrack)
