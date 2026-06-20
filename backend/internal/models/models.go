@@ -48,6 +48,7 @@ type Clip struct {
 	StyleJSON     string  `json:"style_json,omitempty"`
 	FadeIn        float64 `json:"fade_in,omitempty"`
 	FadeOut       float64 `json:"fade_out,omitempty"`
+	Speed         float64 `json:"speed,omitempty"` // 变速倍率，默认 1.0（<1 慢放拉长，>1 加速）
 }
 
 // RenderJob 渲染任务

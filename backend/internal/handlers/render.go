@@ -143,7 +143,7 @@ func (h *Handlers) doRender(projectID int64) {
 		// 若指定了源内截取范围，先裁剪；否则直接用原文件
 		if cl.SourceStart > 0 || cl.SourceEnd > cl.SourceStart {
 			seg := filepath.Join(tmpDir, fmt.Sprintf("v%d.mp4", i))
-			if err := h.FFmpeg.Trim(srcPath, seg, cl.SourceStart, cl.SourceEnd); err != nil {
+			if err := h.FFmpeg.Trim(srcPath, seg, cl.SourceStart, cl.SourceEnd, cl.Speed); err != nil {
 				h.failRender(projectID, "裁剪视频片段失败: "+err.Error())
 				return
 			}
@@ -252,7 +252,7 @@ func (h *Handlers) loadTimeline(projectID int64) (videoClips, audioClips, subCli
 
 	for _, t := range tracks {
 		clipRows, err := h.DB.Query(
-			`SELECT id, track_id, asset_id, timeline_start, timeline_end, source_start, source_end, text, style_json, fade_in, fade_out FROM clips WHERE track_id=? ORDER BY timeline_start`,
+			`SELECT id, track_id, asset_id, timeline_start, timeline_end, source_start, source_end, text, style_json, fade_in, fade_out, speed FROM clips WHERE track_id=? ORDER BY timeline_start`,
 			t.id,
 		)
 		if err != nil {
@@ -262,7 +262,7 @@ func (h *Handlers) loadTimeline(projectID int64) (videoClips, audioClips, subCli
 			var cl models.Clip
 			var assetID sql.NullInt64
 			var text, style sql.NullString
-			clipRows.Scan(&cl.ID, &cl.TrackID, &assetID, &cl.TimelineStart, &cl.TimelineEnd, &cl.SourceStart, &cl.SourceEnd, &text, &style, &cl.FadeIn, &cl.FadeOut)
+			clipRows.Scan(&cl.ID, &cl.TrackID, &assetID, &cl.TimelineStart, &cl.TimelineEnd, &cl.SourceStart, &cl.SourceEnd, &text, &style, &cl.FadeIn, &cl.FadeOut, &cl.Speed)
 			if assetID.Valid {
 				aid := assetID.Int64
 				cl.AssetID = &aid

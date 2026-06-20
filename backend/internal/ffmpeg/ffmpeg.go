@@ -208,16 +208,36 @@ func (f *FFmpeg) BurnSubtitles(video, srtFile, output string, forceStyle string)
 	return nil
 }
 
-// Trim 按源内时间范围裁剪素材（用于片段截取）
-func (f *FFmpeg) Trim(input, output string, start, end float64) error {
+// Trim 按源内时间范围裁剪素材。speed=1（或 0）走流复制；speed≠1 时重编码变速
+// （视频 setpts、音频 atempo 保调），用于片段变速导出。
+func (f *FFmpeg) Trim(input, output string, start, end, speed float64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), f.Timeout)
 	defer cancel()
-	args := []string{
-		"-ss", fmt.Sprintf("%.3f", start),
-		"-to", fmt.Sprintf("%.3f", end),
-		"-i", input,
-		"-c", "copy",
-		"-y", output,
+	if speed == 0 {
+		speed = 1
+	}
+	var args []string
+	if speed == 1 {
+		// 原速：流复制
+		args = []string{
+			"-ss", fmt.Sprintf("%.3f", start),
+			"-to", fmt.Sprintf("%.3f", end),
+			"-i", input,
+			"-c", "copy",
+			"-y", output,
+		}
+	} else {
+		// 变速：重编码。视频 setpts=PTS/speed；音频 atempo 保调（仅当有音轨，否则 -af 会报错）
+		args = []string{
+			"-ss", fmt.Sprintf("%.3f", start),
+			"-to", fmt.Sprintf("%.3f", end),
+			"-i", input,
+			"-vf", fmt.Sprintf("setpts=PTS/%g", speed),
+		}
+		if p, err := f.ProbeMedia(input); err == nil && p.HasAudio {
+			args = append(args, "-af", atempoChain(speed))
+		}
+		args = append(args, "-y", output)
 	}
 	cmd := exec.CommandContext(ctx, f.Bin, args...)
 	combined, err := cmd.CombinedOutput()
@@ -225,6 +245,23 @@ func (f *FFmpeg) Trim(input, output string, start, end float64) error {
 		return fmt.Errorf("trim failed: %w: %s", err, string(combined))
 	}
 	return nil
+}
+
+// atempoChain 把任意倍速拆成若干 ∈[0.5,2.0] 的 atempo 因子链（atempo 单次范围仅 0.5~2）。
+// 例：4 → "atempo=2.0,atempo=2.0"；0.25 → "atempo=0.5,atempo=0.5"。
+func atempoChain(speed float64) string {
+	s := speed
+	var parts []string
+	for s < 0.5 {
+		parts = append(parts, "atempo=0.5")
+		s /= 0.5
+	}
+	for s > 2.0 {
+		parts = append(parts, "atempo=2.0")
+		s /= 2.0
+	}
+	parts = append(parts, fmt.Sprintf("atempo=%.4f", s))
+	return strings.Join(parts, ",")
 }
 
 // RemoveAudioTrack 去除视频的声音轨，只保留画面（-an）

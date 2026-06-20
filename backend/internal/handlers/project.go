@@ -99,14 +99,14 @@ func (h *Handlers) GetProject(c *gin.Context) {
 	for _, t := range trackRows {
 		clips := []models.Clip{}
 		clipRows, _ := h.DB.Query(
-			`SELECT id, track_id, asset_id, timeline_start, timeline_end, source_start, source_end, text, style_json, fade_in, fade_out FROM clips WHERE track_id=? ORDER BY timeline_start`,
+			`SELECT id, track_id, asset_id, timeline_start, timeline_end, source_start, source_end, text, style_json, fade_in, fade_out, speed FROM clips WHERE track_id=? ORDER BY timeline_start`,
 			t.ID,
 		)
 		for clipRows.Next() {
 			var cl models.Clip
 			var assetID sql.NullInt64
 			var text, style sql.NullString
-			clipRows.Scan(&cl.ID, &cl.TrackID, &assetID, &cl.TimelineStart, &cl.TimelineEnd, &cl.SourceStart, &cl.SourceEnd, &text, &style, &cl.FadeIn, &cl.FadeOut)
+			clipRows.Scan(&cl.ID, &cl.TrackID, &assetID, &cl.TimelineStart, &cl.TimelineEnd, &cl.SourceStart, &cl.SourceEnd, &text, &style, &cl.FadeIn, &cl.FadeOut, &cl.Speed)
 			if assetID.Valid {
 				aid := assetID.Int64
 				cl.AssetID = &aid
@@ -155,8 +155,8 @@ func (h *Handlers) SaveClips(c *gin.Context) {
 			assetID = *cl.AssetID
 		}
 		tx.Exec(
-			`INSERT INTO clips (track_id, asset_id, timeline_start, timeline_end, source_start, source_end, text, style_json, fade_in, fade_out) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			trackID, assetID, cl.TimelineStart, cl.TimelineEnd, cl.SourceStart, cl.SourceEnd, cl.Text, cl.StyleJSON, cl.FadeIn, cl.FadeOut,
+			`INSERT INTO clips (track_id, asset_id, timeline_start, timeline_end, source_start, source_end, text, style_json, fade_in, fade_out, speed) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			trackID, assetID, cl.TimelineStart, cl.TimelineEnd, cl.SourceStart, cl.SourceEnd, cl.Text, cl.StyleJSON, cl.FadeIn, cl.FadeOut, cl.Speed,
 		)
 	}
 	tx.Commit()

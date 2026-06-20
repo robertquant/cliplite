@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS clips (
   style_json TEXT,
   fade_in REAL,
   fade_out REAL,
+  speed REAL DEFAULT 1.0,
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );
 
@@ -95,5 +96,37 @@ CREATE TABLE IF NOT EXISTS render_jobs (
 );
 `
 	_, err := db.Exec(schema)
+	if err != nil {
+		return err
+	}
+	return migrateAddClipSpeed(db)
+}
+
+// migrateAddClipSpeed 给已有库的 clips 表补 speed 列。
+// CREATE TABLE IF NOT EXISTS 不会给已存在的老表加列，所以需手动检查并 ALTER。
+func migrateAddClipSpeed(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(clips)`)
+	if err != nil {
+		return err
+	}
+	hasSpeed := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "speed" {
+			hasSpeed = true
+		}
+	}
+	rows.Close()
+	if hasSpeed {
+		return nil
+	}
+	_, err = db.Exec(`ALTER TABLE clips ADD COLUMN speed REAL DEFAULT 1.0`)
 	return err
 }
