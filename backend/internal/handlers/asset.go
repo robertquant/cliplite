@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/cliplite/backend/internal/ffmpeg"
 	"github.com/cliplite/backend/internal/models"
@@ -121,6 +122,23 @@ func (h *Handlers) GetAsset(c *gin.Context) {
 	a.Codec = codec.String
 	a.Thumbnail = "/api/assets/" + strconv.FormatInt(id, 10) + "/file"
 	c.JSON(200, a)
+}
+
+// RenameAsset PATCH /api/assets/:id {filename} — 重命名素材
+func (h *Handlers) RenameAsset(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body struct {
+		Filename string `json:"filename"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Filename) == "" {
+		c.JSON(400, gin.H{"error": "filename 不能为空"})
+		return
+	}
+	if _, err := h.DB.Exec(`UPDATE assets SET filename=? WHERE id=?`, strings.TrimSpace(body.Filename), id); err != nil {
+		c.JSON(500, gin.H{"error": "重命名失败: " + err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "id": id, "filename": body.Filename})
 }
 
 // DeleteAsset DELETE /api/assets/:id — 删除素材（DB 记录 + 文件 + 关联片段）
