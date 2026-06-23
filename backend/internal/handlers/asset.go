@@ -241,6 +241,7 @@ func (h *Handlers) ServeAssetFile(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "素材不存在"})
 		return
 	}
+	c.Header("Cache-Control", "no-cache") // id 可能被复用（删光后重新计数），强制浏览器按 Last-Modified 验证，避免命中旧素材缓存
 	c.File(path) // 内联(inline)：video/audio 元素才能流式预览；FileAttachment 的 attachment 头会被当下载，导致切换素材时预览不刷新
 }
 
